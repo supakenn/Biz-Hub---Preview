@@ -1,11 +1,11 @@
 {
-  "name": "Angel's POS",
-  "short_name": "Angel POS",
+  "name": "Biz POS",
+  "short_name": "Biz POS",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#dc2626",
   "theme_color": "#dc2626",
-  "description": "Angel's POS application offline capable.",
+  "description": "Biz POS — multi-tenant offline-capable point of sale.",
   "orientation": "portrait-primary",
   "icons": [
     {

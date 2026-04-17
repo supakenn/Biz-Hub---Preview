@@ -1,6 +1,6 @@
 // --- ANGEL'S BURGER DEFAULT TEMPLATE ---
 export const angelsBurgerTemplate = {
-  business: { name: "ANGEL'S POS", theme: 'red', hasEndingReconciliation: true },
+  business: { name: "ANGEL'S BURGER", theme: 'red', hasEndingReconciliation: true },
   categories: [
     { id: 'cat_main',   name: 'Main Orders', color: 'red'    },
     { id: 'cat_extras', name: 'Extras',      color: 'yellow' },
