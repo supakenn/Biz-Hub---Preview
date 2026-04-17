@@ -1,0 +1,3 @@
+@echo off
+echo Starting Angels POS on local network...
+npm run dev -- --host
