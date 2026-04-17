@@ -26,80 +26,54 @@ import {
 } from 'lucide-react';
 
 
-// --- MENU DATA ---
-const MENU = {
-  orders: [
-    { id: 'beef_burger', name: 'Beef Burger', price: 40 },
-    { id: 'chiz_burger', name: 'Chiz Burger', price: 50 },
-    { id: 'egg_sandwich', name: 'Egg Sandwich', price: 20 },
-    { id: 'chiz_hotdog', name: 'Chiz Hotdog', price: 37 },
-    { id: 'footlong', name: 'Footlong', price: 56 },
-    { id: 'jalapeno', name: 'Jalapeño', price: 65 },
-    { id: 'hungarian', name: 'Hungarian', price: 70 },
-    { id: 'footlong_combo', name: 'Footlong Combo', price: 136 },
-    { id: 'jalapeno_combo', name: 'Jalapeño Combo', price: 145 },
+// --- COLOR MAP for dynamic category sidebar colors ---
+const COLOR_MAP = {
+  red:    { bg: 'bg-red-600',    text: 'text-white' },
+  yellow: { bg: 'bg-yellow-400', text: 'text-yellow-900' },
+  blue:   { bg: 'bg-blue-500',   text: 'text-white' },
+  green:  { bg: 'bg-green-500',  text: 'text-white' },
+  purple: { bg: 'bg-purple-500', text: 'text-white' },
+  gray:   { bg: 'bg-gray-500',   text: 'text-white' },
+};
+
+// --- ANGEL'S BURGER DEFAULT TEMPLATE ---
+const ANGELS_BURGER_TEMPLATE = {
+  business: { name: "ANGEL'S POS", theme: 'red', hasEndingReconciliation: true },
+  categories: [
+    { id: 'cat_main',   name: 'Main Orders', color: 'red'    },
+    { id: 'cat_extras', name: 'Extras',      color: 'yellow' },
+    { id: 'cat_drinks', name: 'Drinks',      color: 'blue'   },
   ],
-  extras: [
-    { id: 'ex_chiz', name: 'Chiz', price: 5 },
-    { id: 'ex_egg', name: 'Egg', price: 15 },
-    { id: 'ex_bacon', name: 'Bacon', price: 25 },
-    { id: 'ex_patty', name: 'Patty', price: 15 },
-    { id: 'ex_b_buns', name: 'B. Buns', price: 5 },
-    { id: 'custom_amount', name: 'Custom Value', price: 0 }
-  ],
-  drinks: [
-    { id: 'dr_coke', name: 'Coke', price: 25 },
-    { id: 'dr_sprite', name: 'Sprite', price: 25 },
-    { id: 'dr_royal', name: 'Royal', price: 25 },
-    { id: 'dr_predator', name: 'Predator', price: 25 },
-    { id: 'dr_coke_zero', name: 'Coke Zero', price: 25 },
-    { id: 'dr_water', name: 'Water', price: 16 }
+  inventoryDb: {
+    'Buns': 5, 'HD Buns': 5, 'FL Buns': 12, 'Patty': 15,
+    'FL Dog': 44, 'Hungarian': 65, 'Jalapeño': 53, 'Chiz': 5,
+    'Bacon': 25, 'Hotdog': 13.5, 'Egg': 15,
+    'Water': 16, 'Coke': 25, 'Sprite': 25, 'Royal': 25,
+    'Predator': 25, 'Coke Zero': 25
+  },
+  menuItems: [
+    { id: 'beef_burger',    categoryId: 'cat_main',   name: 'Beef Burger',    price: 40,  recipe: { 'Patty': 2, 'Buns': 2 } },
+    { id: 'chiz_burger',   categoryId: 'cat_main',   name: 'Chiz Burger',    price: 50,  recipe: { 'Patty': 2, 'Buns': 2, 'Chiz': 2 } },
+    { id: 'egg_sandwich',  categoryId: 'cat_main',   name: 'Egg Sandwich',   price: 20,  recipe: { 'Egg': 1, 'Buns': 1 } },
+    { id: 'chiz_hotdog',   categoryId: 'cat_main',   name: 'Chiz Hotdog',    price: 37,  recipe: { 'Hotdog': 2, 'HD Buns': 2 } },
+    { id: 'footlong',      categoryId: 'cat_main',   name: 'Footlong',       price: 56,  recipe: { 'FL Dog': 1, 'FL Buns': 1 } },
+    { id: 'jalapeno',      categoryId: 'cat_main',   name: 'Jalapeño',       price: 65,  recipe: { 'Jalapeño': 1, 'FL Buns': 1 } },
+    { id: 'hungarian',     categoryId: 'cat_main',   name: 'Hungarian',      price: 70,  recipe: { 'Hungarian': 1, 'HD Buns': 1 } },
+    { id: 'footlong_combo',categoryId: 'cat_main',   name: 'Footlong Combo', price: 136, recipe: { 'FL Dog': 1, 'FL Buns': 1, 'Patty': 2, 'Egg': 2, 'Chiz': 4 } },
+    { id: 'jalapeno_combo',categoryId: 'cat_main',   name: 'Jalapeño Combo', price: 145, recipe: { 'Jalapeño': 1, 'FL Buns': 1, 'Patty': 2, 'Egg': 2, 'Chiz': 4 } },
+    { id: 'ex_chiz',       categoryId: 'cat_extras', name: 'Chiz',           price: 5,   recipe: { 'Chiz': 1 } },
+    { id: 'ex_egg',        categoryId: 'cat_extras', name: 'Egg',            price: 15,  recipe: { 'Egg': 1 } },
+    { id: 'ex_bacon',      categoryId: 'cat_extras', name: 'Bacon',          price: 25,  recipe: { 'Bacon': 1 } },
+    { id: 'ex_patty',      categoryId: 'cat_extras', name: 'Patty',          price: 15,  recipe: { 'Patty': 1 } },
+    { id: 'ex_b_buns',     categoryId: 'cat_extras', name: 'B. Buns',        price: 5,   recipe: { 'Buns': 1 } },
+    { id: 'custom_amount', categoryId: 'cat_extras', name: 'Custom Value',   price: 0,   recipe: {} },
+    { id: 'dr_coke',       categoryId: 'cat_drinks', name: 'Coke',           price: 25,  recipe: { 'Coke': 1 } },
+    { id: 'dr_sprite',     categoryId: 'cat_drinks', name: 'Sprite',         price: 25,  recipe: { 'Sprite': 1 } },
+    { id: 'dr_royal',      categoryId: 'cat_drinks', name: 'Royal',          price: 25,  recipe: { 'Royal': 1 } },
+    { id: 'dr_predator',   categoryId: 'cat_drinks', name: 'Predator',       price: 25,  recipe: { 'Predator': 1 } },
+    { id: 'dr_coke_zero',  categoryId: 'cat_drinks', name: 'Coke Zero',      price: 25,  recipe: { 'Coke Zero': 1 } },
+    { id: 'dr_water',      categoryId: 'cat_drinks', name: 'Water',          price: 16,  recipe: { 'Water': 1 } },
   ]
-};
-
-// --- INGREDIENTS DB & PRICES (Matching the Google Sheet) ---
-const INGREDIENTS_DB = {
-  'Buns': 5,
-  'HD Buns': 5,
-  'FL Buns': 12,
-  'Patty': 15,
-  'FL Dog': 44,
-  'Hungarian': 65,
-  'Jalapeño': 53,
-  'Chiz': 5,
-  'Bacon': 25,
-  'Hotdog': 13.5, 
-  'Egg': 15,
-  'Water': 16,
-  'Coke': 25,
-  'Sprite': 25,
-  'Royal': 25,
-  'Predator': 25,
-  'Coke Zero': 25
-};
-
-// --- RECIPE MAPPING ---
-const RECIPES = {
-  'beef_burger': { 'Patty': 2, 'Buns': 2 },
-  'chiz_burger': { 'Patty': 2, 'Buns': 2, 'Chiz': 2 },
-  'egg_sandwich': { 'Egg': 1, 'Buns': 1 },
-  'chiz_hotdog': { 'Hotdog': 2, 'HD Buns': 2 },
-  'footlong': { 'FL Dog': 1, 'FL Buns': 1 },
-  'jalapeno': { 'Jalapeño': 1, 'FL Buns': 1 },
-  'hungarian': { 'Hungarian': 1, 'HD Buns': 1 },
-  'footlong_combo': { 'FL Dog': 1, 'FL Buns': 1, 'Patty': 2, 'Egg': 2, 'Chiz': 4 },
-  'jalapeno_combo': { 'Jalapeño': 1, 'FL Buns': 1, 'Patty': 2, 'Egg': 2, 'Chiz': 4 },
-  'ex_chiz': { 'Chiz': 1 },
-  'ex_egg': { 'Egg': 1 },
-  'ex_bacon': { 'Bacon': 1 },
-  'ex_patty': { 'Patty': 1 },
-  'ex_b_buns': { 'Buns': 1 },
-  'dr_coke': { 'Coke': 1 },
-  'dr_coke_zero': { 'Coke Zero': 1 },
-  'dr_sprite': { 'Sprite': 1 },
-  'dr_royal': { 'Royal': 1 },
-  'dr_predator': { 'Predator': 1 },
-  'dr_water': { 'Water': 1 },
 };
 
 export default function App() {
@@ -154,7 +128,12 @@ export default function App() {
   const [devContactModal, setDevContactModal] = useState(false);
   const [clearConfirmModal, setClearConfirmModal] = useState(false);
 
-  const [selectedRecipeItem, setSelectedRecipeItem] = useState(MENU.orders[0].id);
+  const [storeConfig, setStoreConfig] = useState(() => {
+    const saved = localStorage.getItem('pos_storeConfig');
+    return saved ? JSON.parse(saved) : null;
+  });
+
+  const [selectedRecipeItem, setSelectedRecipeItem] = useState(null);
   
   useEffect(() => {
     localStorage.setItem('pos_config', JSON.stringify(config));
@@ -165,9 +144,22 @@ export default function App() {
     }
   }, [config]);
 
+  useEffect(() => {
+    if (storeConfig) {
+      localStorage.setItem('pos_storeConfig', JSON.stringify(storeConfig));
+      // Initialize selectedRecipeItem on first load
+      if (!selectedRecipeItem && storeConfig.menuItems?.length > 0) {
+        setSelectedRecipeItem(storeConfig.menuItems[0].id);
+      }
+    }
+  }, [storeConfig]);
+
   const getMenuPrice = (id, defaultPrice) => config.customPrices.menu[id] ?? defaultPrice;
   const getIngredientPrice = (name, defaultPrice) => config.customPrices.ingredients[name] ?? defaultPrice;
-  const getRecipe = (id) => config.customRecipes?.[id] || RECIPES[id];
+  const getRecipe = (id) => {
+    const item = storeConfig?.menuItems?.find(m => m.id === id);
+    return config.customRecipes?.[id] || item?.recipe || {};
+  };
 
 
   const [isAddMode, setIsAddMode] = useState(true);
@@ -508,6 +500,8 @@ export default function App() {
   };
 
   const spreadsheetData = useMemo(() => {
+    if (!storeConfig) return { rows: [], grandTotalSales: 0, adjustmentOrder: null };
+
     // 1. Calculate total sold per raw ingredient
     const ingredientsSold = {};
     orders.forEach(order => {
@@ -522,10 +516,10 @@ export default function App() {
       });
     });
 
-    // 2. Map to spreadsheet rows
+    // 2. Map to spreadsheet rows from storeConfig.inventoryDb
     let grandTotalSales = 0;
     const adjustmentItems = [];
-    const rows = Object.entries(INGREDIENTS_DB).map(([name, defaultP]) => {
+    const rows = Object.entries(storeConfig.inventoryDb).map(([name, defaultP]) => {
       const price = getIngredientPrice(name, defaultP);
       const normalSold = ingredientsSold[name] || 0;
       const start = parseInt(inventory[name]?.starting) || 0;
@@ -662,6 +656,29 @@ export default function App() {
     );
   };
 
+  // --- FALLBACK SCREEN: No config loaded ---
+  if (!storeConfig) {
+    return (
+      <div className="h-[100dvh] flex flex-col items-center justify-center bg-gray-100 dark:bg-gray-950 font-sans p-8 text-center">
+        <div className="bg-white dark:bg-gray-900 rounded-3xl shadow-2xl p-10 max-w-sm w-full border border-gray-200 dark:border-gray-800 flex flex-col items-center gap-6">
+          <div className="bg-red-100 dark:bg-red-900/20 p-6 rounded-full">
+            <ShoppingCart size={64} className="text-red-600 dark:text-red-400" />
+          </div>
+          <div>
+            <h1 className="text-2xl font-black uppercase tracking-tight text-gray-800 dark:text-gray-100">No Shop Configuration</h1>
+            <p className="text-sm text-gray-400 dark:text-gray-500 font-bold mt-2">Load a template to get started.</p>
+          </div>
+          <button
+            onClick={() => setStoreConfig(ANGELS_BURGER_TEMPLATE)}
+            className="w-full py-4 bg-red-600 hover:bg-red-700 text-white font-black rounded-2xl shadow-xl active:scale-95 transition-all border-b-4 border-red-800 uppercase tracking-widest"
+          >
+            Load Angel's Burger Template
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col sm:flex-row h-[100dvh] bg-gray-100 dark:bg-gray-900 font-sans overflow-hidden transition-colors" style={{ zoom: config.scale || 1 }}>
       
@@ -671,7 +688,7 @@ export default function App() {
         {/* Header - Center Revenue */}
         <div className="bg-red-600 text-white px-2 py-2 shadow-sm flex justify-between items-center z-10 shrink-0 gap-1 tutorial-topbar">
           <h1 onClick={() => setDevContactModal(true)} className="text-xs sm:text-base font-black tracking-tight text-yellow-300 flex flex-col leading-[0.8] items-start ml-1 cursor-pointer hover:scale-105 transition-transform">
-            <span>ANGEL'S</span>
+            <span>{storeConfig.business.name.split("'")[0] || storeConfig.business.name}</span>
             <span className="text-white text-[9px] tracking-widest mt-0.5">POS</span>
           </h1>
           <div className="flex gap-1 sm:gap-2">
@@ -852,34 +869,21 @@ export default function App() {
             </div>
           ) : (
             <div className="max-w-4xl mx-auto flex flex-col gap-1 tutorial-items w-full animate-in fade-in duration-500">
-              
-              <section className="flex flex-row items-stretch border-b border-gray-100 dark:border-gray-800 pb-1">
-                <div className="w-4 shrink-0 bg-red-600 flex items-center justify-center rounded-l-sm">
-                  <span className="text-[8px] font-black text-white uppercase tracking-widest whitespace-nowrap" style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}>Main Orders</span>
-                </div>
-                <div className="flex-1 grid grid-cols-3 gap-0.5 ml-0.5">
-                  {MENU.orders.map(item => <ItemButton key={item.id} item={item} />)}
-                </div>
-              </section>
-
-              <section className="flex flex-row items-stretch border-b border-gray-100 dark:border-gray-800 pb-1">
-                <div className="w-4 shrink-0 bg-yellow-400 flex items-center justify-center rounded-l-sm">
-                  <span className="text-[8px] font-black text-yellow-900 uppercase tracking-widest whitespace-nowrap" style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}>Extras</span>
-                </div>
-                <div className="flex-1 grid grid-cols-3 gap-0.5 ml-0.5">
-                  {MENU.extras.map(item => <ItemButton key={item.id} item={item} />)}
-                </div>
-              </section>
-
-              <section className="flex flex-row items-stretch border-b border-gray-100 dark:border-gray-800 pb-1">
-                <div className="w-4 shrink-0 bg-blue-500 flex items-center justify-center rounded-l-sm">
-                  <span className="text-[8px] font-black text-white uppercase tracking-widest whitespace-nowrap" style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}>Drinks</span>
-                </div>
-                <div className="flex-1 grid grid-cols-3 gap-0.5 ml-0.5">
-                  {MENU.drinks.map(item => <ItemButton key={item.id} item={item} />)}
-                </div>
-              </section>
-
+              {storeConfig.categories.map(category => {
+                const colors = COLOR_MAP[category.color] || COLOR_MAP.gray;
+                return (
+                  <section key={category.id} className="flex flex-row items-stretch border-b border-gray-100 dark:border-gray-800 pb-1">
+                    <div className={`w-4 shrink-0 ${colors.bg} flex items-center justify-center rounded-l-sm`}>
+                      <span className={`text-[8px] font-black ${colors.text} uppercase tracking-widest whitespace-nowrap`} style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}>{category.name}</span>
+                    </div>
+                    <div className="flex-1 grid grid-cols-3 gap-0.5 ml-0.5">
+                      {storeConfig.menuItems.filter(item => item.categoryId === category.id).map(item => (
+                        <ItemButton key={item.id} item={item} />
+                      ))}
+                    </div>
+                  </section>
+                );
+              })}
             </div>
           )}
         </div>
@@ -1217,8 +1221,8 @@ export default function App() {
                   
                   <div className="grid sm:grid-cols-2 gap-6">
                     <div>
-                      <h3 className="font-black border-b pb-1 mb-2 dark:border-gray-700 text-sm text-gray-800 dark:text-gray-200">Menu Orders</h3>
-                      {MENU.orders.map(item => (
+                      <h3 className="font-black border-b pb-1 mb-2 dark:border-gray-700 text-sm text-gray-800 dark:text-gray-200">Menu Items</h3>
+                      {storeConfig.menuItems.filter(i => i.id !== 'custom_amount').map(item => (
                         <div key={item.id} className="flex justify-between items-center mb-1 bg-gray-50 dark:bg-gray-800 p-1 rounded">
                           <span className="text-xs font-bold text-gray-800 dark:text-gray-200">{item.name} <span className="text-[9px] text-gray-400 font-normal">({item.price})</span></span>
                           <input 
@@ -1241,7 +1245,7 @@ export default function App() {
                     </div>
                     <div>
                       <h3 className="font-black border-b pb-1 mb-2 dark:border-gray-700 text-sm text-gray-800 dark:text-gray-200">Spreadsheet Ingredients</h3>
-                      {Object.entries(INGREDIENTS_DB).map(([name, defaultP]) => (
+                      {Object.entries(storeConfig.inventoryDb).map(([name, defaultP]) => (
                         <div key={name} className="flex justify-between items-center mb-1 bg-gray-50 dark:bg-gray-800 p-1 rounded">
                           <span className="text-xs font-bold text-gray-800 dark:text-gray-200">{name} <span className="text-[9px] text-gray-400 font-normal">({defaultP})</span></span>
                           <input 
@@ -1274,19 +1278,20 @@ export default function App() {
                   
                   <div className="mb-4">
                     <select 
-                      value={selectedRecipeItem} 
+                      value={selectedRecipeItem || ''} 
                       onChange={(e) => setSelectedRecipeItem(e.target.value)}
                       className="w-full sm:w-1/2 p-2 rounded border bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200 border-gray-300 dark:border-gray-700 outline-none focus:ring-2 focus:ring-blue-500 font-bold text-sm"
                     >
-                      {[...MENU.orders, ...MENU.extras, ...MENU.drinks].map(item => (
+                      {storeConfig.menuItems.map(item => (
                         <option key={item.id} value={item.id}>{item.name}</option>
                       ))}
                     </select>
                   </div>
 
                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                    {Object.keys(INGREDIENTS_DB).map(ing => {
-                       const currentRecipe = config.customRecipes?.[selectedRecipeItem] || RECIPES[selectedRecipeItem];
+                    {Object.keys(storeConfig.inventoryDb).map(ing => {
+                       const baseRecipe = storeConfig.menuItems.find(m => m.id === selectedRecipeItem)?.recipe || {};
+                       const currentRecipe = config.customRecipes?.[selectedRecipeItem] || baseRecipe;
                        const val = currentRecipe?.[ing] || '';
                        return (
                          <div key={ing} className="flex justify-between items-center bg-gray-100 dark:bg-gray-800 p-2 rounded shadow-sm">
@@ -1298,8 +1303,7 @@ export default function App() {
                                     const v = e.target.value;
                                     setConfig(p => {
                                        const n = { ...p.customRecipes };
-                                       if (!n[selectedRecipeItem]) n[selectedRecipeItem] = { ...(RECIPES[selectedRecipeItem] || {}) };
-                                       
+                                       if (!n[selectedRecipeItem]) n[selectedRecipeItem] = { ...baseRecipe };
                                        if (!v || v === '0') {
                                          delete n[selectedRecipeItem][ing];
                                        } else {
