@@ -148,6 +148,8 @@ export default function App() {
   }, [toast]);
 
   const [settingsTab, setSettingsTab] = useState('general');
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false);
 
   const [devContactModal, setDevContactModal] = useState(false);
   const [clearConfirmModal, setClearConfirmModal] = useState(false);
@@ -296,6 +298,22 @@ export default function App() {
     }));
   };
 
+  const handleRemoveManualCount = () => {
+    if (window.confirm("This will REMOVE all manual counts from the report and unlock normal ordering. Proceed?")) {
+      setInventory(prev => {
+        const nextInv = { ...prev };
+        Object.keys(nextInv).forEach(name => {
+          if (nextInv[name]) {
+            const { endingOverride, ...rest } = nextInv[name];
+            nextInv[name] = rest;
+          }
+        });
+        return nextInv;
+      });
+      setToast("Manual counts cleared.");
+    }
+  };
+
   // --- LOGIC: REPORT GENERATION (SPREADSHEET FORMAT) ---
   
 
@@ -320,7 +338,7 @@ export default function App() {
     if (format === 'csv') {
       let csv = "Item,Starting,Deliver,Waste,Ending,Sold,Price,Sales\n";
       spreadsheetData.rows.forEach(r => {
-        csv += `${r.name},${r.start},${r.deliver},${r.waste},${r.ending},${r.sold},${r.price},${r.sales}\n`;
+        csv += `${r.name},${r.start},${r.deliver},${r.waste},${r.finalEnding},${r.finalSold},${r.price},${r.sales}\n`;
       });
       csv += `,,,,,,,Total Sales: ${spreadsheetData.grandTotalSales}\n`;
       const blob = new Blob([csv], { type: 'text/csv' });
@@ -342,13 +360,13 @@ export default function App() {
       doc.autoTable({
         startY: 20,
         head: [['Item', 'Starting', 'Deliver', 'Waste', 'Ending', 'Sold', 'Price', 'Sales']],
-        body: spreadsheetData.rows.map(r => [r.name, r.start, r.deliver, r.waste, r.ending, r.sold, r.price, r.sales]),
+        body: spreadsheetData.rows.map(r => [r.name, r.start, r.deliver, r.waste, r.finalEnding, r.finalSold, r.price, r.sales]),
         foot: [['', '', '', '', '', '', 'Total', spreadsheetData.grandTotalSales]]
       });
       doc.save(`Report_${timestamp}.pdf`);
     } else if (format === 'xlsx') {
       const ws_data = [["Item", "Starting", "Deliver", "Waste", "Ending", "Sold", "Price", "Sales"]];
-      spreadsheetData.rows.forEach(r => ws_data.push([r.name, r.start, r.deliver, r.waste, r.ending, r.sold, r.price, r.sales]));
+      spreadsheetData.rows.forEach(r => ws_data.push([r.name, r.start, r.deliver, r.waste, r.finalEnding, r.finalSold, r.price, r.sales]));
       ws_data.push(["", "", "", "", "", "", "Total Sales", spreadsheetData.grandTotalSales]);
       const ws = XLSX.utils.aoa_to_sheet(ws_data);
       const wb = XLSX.utils.book_new();
@@ -506,26 +524,61 @@ export default function App() {
 
     // 2. Map to spreadsheet rows
     let grandTotalSales = 0;
+    const adjustmentItems = [];
     const rows = Object.entries(INGREDIENTS_DB).map(([name, defaultP]) => {
       const price = getIngredientPrice(name, defaultP);
-      const sold = ingredientsSold[name] || 0;
+      const normalSold = ingredientsSold[name] || 0;
       const start = parseInt(inventory[name]?.starting) || 0;
       const deliver = parseInt(inventory[name]?.deliver) || 0;
       const waste = parseInt(inventory[name]?.waste) || 0;
       
-      const ending = start + deliver - waste - sold;
-      const sales = sold * price;
+      const theoreticalEnding = start + deliver - waste - normalSold;
+      const rawOverride = inventory[name]?.endingOverride;
+      const hasOverride = rawOverride !== undefined && rawOverride !== '';
+      const finalEnding = hasOverride ? parseInt(rawOverride) : theoreticalEnding;
       
+      const missingQty = theoreticalEnding - finalEnding;
+      const finalSold = normalSold + missingQty;
+      const sales = finalSold * price;
+      
+      if (missingQty !== 0) {
+        adjustmentItems.push({
+          id: `adj_${name}`,
+          name: name,
+          qty: Math.abs(missingQty),
+          price: missingQty > 0 ? price : -price,
+          isAdjustment: true,
+          type: missingQty > 0 ? 'Shortage' : 'Excess'
+        });
+      }
+
       grandTotalSales += sales;
 
-      return { name, start, deliver, waste, sold, ending, price, sales };
+      return { 
+        name, start, deliver, waste, 
+        normalSold, theoreticalEnding, 
+        finalEnding, finalSold, 
+        price, sales, missingQty, hasOverride
+      };
     });
 
-    return { rows, grandTotalSales };
+    let adjustmentOrder = null;
+    if (adjustmentItems.length > 0) {
+      adjustmentOrder = {
+        id: 'ADJ',
+        items: adjustmentItems,
+        total: adjustmentItems.reduce((sum, item) => sum + (item.price * item.qty), 0),
+        timestamp: Date.now(),
+        isReconciliation: true
+      };
+    }
+
+    return { rows, grandTotalSales, adjustmentOrder };
   }, [orders, inventory]);
 
   // --- COMPONENTS ---
   const ItemButton = ({ item }) => {
+    const isLocked = !!spreadsheetData.adjustmentOrder;
     const activeOrder = orders.find(o => o.id === activeOrderId) || { items: [] };
     let cartQty = 0;
     if (item.id === 'custom_amount') {
@@ -537,11 +590,13 @@ export default function App() {
 
     const clickHandler = (e) => {
       e.preventDefault(); 
+      if (isLocked) return;
       handleItemClick(item);
     };
 
     const contextMenuHandler = (e) => {
       e.preventDefault();
+      if (isLocked) return;
       handleItemLongPress(item);
     };
 
@@ -549,10 +604,13 @@ export default function App() {
       <button
         onClick={clickHandler}
         onContextMenu={contextMenuHandler}
+        disabled={isLocked}
         className={`touch-manipulation relative flex flex-col items-center justify-center p-1 min-h-[55px] rounded-sm transition-all duration-150 active:scale-95 border select-none overflow-hidden
-          ${isAddMode 
-            ? 'bg-white border-gray-200 hover:bg-yellow-50 text-gray-800 dark:bg-gray-800 dark:border-gray-700 dark:text-gray-100 dark:hover:bg-gray-700' 
-            : 'bg-red-50/50 border-red-200 hover:bg-red-100 text-red-900'}
+          ${isLocked 
+            ? 'bg-gray-100 border-gray-300 text-gray-400 cursor-not-allowed opacity-50 grayscale'
+            : isAddMode 
+              ? 'bg-white border-gray-200 hover:bg-yellow-50 text-gray-800 dark:bg-gray-800 dark:border-gray-700 dark:text-gray-100 dark:hover:bg-gray-700' 
+              : 'bg-red-50/50 border-red-200 hover:bg-red-100 text-red-900'}
         `}
       >
         {cartQty > 0 ? (
@@ -619,7 +677,7 @@ export default function App() {
           <div className="flex gap-1 sm:gap-2">
             <div className="flex flex-col items-center bg-black/20 px-2 sm:px-3 py-1 rounded-lg shadow-inner min-w-[70px] sm:min-w-[80px] justify-center">
                <span className="text-[8px] font-bold text-red-200 uppercase tracking-widest mb-0.5">Revenue</span>
-               <span className="text-sm sm:text-base font-black text-white leading-none">₱{orders.reduce((sum, o) => sum + o.total, 0)}</span>
+               <span className="text-sm sm:text-base font-black text-white leading-none">₱{orders.reduce((sum, o) => sum + o.total, 0) + (spreadsheetData.adjustmentOrder?.total || 0)}</span>
             </div>
             
             <div className="flex flex-col items-center bg-black/20 px-2 sm:px-3 py-1 rounded-lg shadow-inner min-w-[70px] sm:min-w-[80px] justify-center">
@@ -639,7 +697,7 @@ export default function App() {
         <div 
           ref={ordersContainerRef}
           onScroll={handleOrdersScroll}
-          className="flex-1 overflow-y-auto p-1 bg-gray-50 dark:bg-gray-950 content-start grid grid-cols-2 gap-1 relative scroll-smooth tutorial-orderlist"
+          className="flex-1 overflow-y-auto p-1 bg-gray-50 dark:bg-gray-950 content-start grid grid-cols-2 gap-1 relative scroll-smooth tutorial-orderlist shadow-inner"
         >
           {orders.map((order) => {
             const isActive = activeOrderId === order.id;
@@ -672,11 +730,13 @@ export default function App() {
           <div ref={ordersEndRef} className="col-span-2 h-2 shrink-0" />
         </div>
 
+        {/* SYSTEM ADJUSTMENT FIXED FOOTER REMOVED (Moved to Right Panel) */}
+
         {/* Helper Button */}
         {showScrollDown && (
           <button 
             onClick={scrollToLatest}
-            className="absolute bottom-4 left-1/2 -translate-x-1/2 sm:left-auto sm:right-4 z-50 bg-blue-600 text-white px-4 py-2 rounded-full shadow-[0_4px_15px_-3px_rgba(37,99,235,0.5)] font-black text-xs flex items-center justify-center gap-1 hover:bg-blue-700 animate-in fade-in slide-in-from-bottom border-2 border-blue-400 active:scale-95"
+            className="absolute left-1/2 -translate-x-1/2 sm:left-auto sm:right-4 z-50 bg-blue-600 text-white px-4 py-2 rounded-full shadow-[0_4px_15px_-3px_rgba(37,99,235,0.5)] font-black text-xs flex items-center justify-center gap-1 hover:bg-blue-700 animate-in fade-in slide-in-from-bottom border-2 border-blue-400 active:scale-95 bottom-4"
           >
             LATEST ORDER ↓
           </button>
@@ -715,9 +775,14 @@ export default function App() {
           {/* New Order */}
           <button 
             onClick={createNewOrder}
-            className="flex-1 py-1.5 px-2 rounded-lg bg-yellow-400 tutorial-neworder tutorial-neworder text-yellow-900 font-black text-xs flex items-center justify-center gap-1 hover:bg-yellow-500 transition-colors shadow-sm active:scale-95 tracking-wide ring-1 ring-yellow-500/50"
+            disabled={!!spreadsheetData.adjustmentOrder}
+            className={`flex-1 py-1.5 px-2 rounded-lg font-black text-xs flex items-center justify-center gap-1 transition-all shadow-sm tracking-wide ring-1 
+              ${spreadsheetData.adjustmentOrder 
+                ? 'bg-gray-200 text-gray-400 cursor-not-allowed grayscale' 
+                : 'bg-yellow-400 text-yellow-900 hover:bg-yellow-500 active:scale-95 ring-yellow-500/50'
+              }`}
           >
-            <Plus size={16} strokeWidth={3} /> NEW ORDER
+            <Plus size={16} strokeWidth={3} /> {spreadsheetData.adjustmentOrder ? 'LOCKED (MANUAL COUNT)' : 'NEW ORDER'}
           </button>
 
           {/* Sheet Report */}
@@ -730,37 +795,93 @@ export default function App() {
         </div>
 
         {/* Menu Grid Container */}
-        <div className="overflow-y-auto sm:flex-1 p-1 bg-white dark:bg-gray-900 w-full">
-          <div className="max-w-4xl mx-auto flex flex-col gap-1 tutorial-items">
-            
-            <section className="flex flex-row items-stretch border-b border-gray-100 dark:border-gray-800 pb-1">
-              <div className="w-4 shrink-0 bg-red-600 flex items-center justify-center rounded-l-sm">
-                <span className="text-[8px] font-black text-white uppercase tracking-widest whitespace-nowrap" style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}>Main Orders</span>
-              </div>
-              <div className="flex-1 grid grid-cols-3 gap-0.5 ml-0.5">
-                {MENU.orders.map(item => <ItemButton key={item.id} item={item} />)}
-              </div>
-            </section>
+        <div className="overflow-y-auto sm:flex-1 bg-white dark:bg-gray-900 w-full flex flex-col">
+          {spreadsheetData.adjustmentOrder ? (
+            <div className="flex-1 flex flex-col bg-purple-50 dark:bg-purple-900/10 animate-in fade-in duration-300">
+               {/* Fixed Header within Dashboard */}
+               <div className="p-4 bg-white dark:bg-gray-900 border-b-2 border-purple-200 dark:border-purple-800 shadow-sm flex justify-between items-center shrink-0">
+                  <div className="flex flex-col">
+                    <h2 className="text-xl font-black text-purple-700 dark:text-purple-300 uppercase tracking-tighter">Manual Count Summary</h2>
+                    <span className="text-[10px] text-purple-500 font-bold uppercase tracking-tight">Shift Adjustments List</span>
+                  </div>
+                  <div className="bg-purple-600 text-white px-4 py-1.5 rounded-xl shadow-md flex flex-col items-end border-b-4 border-purple-800">
+                    <span className="text-[9px] font-bold uppercase tracking-widest opacity-80">Net Adjustment</span>
+                    <span className="font-black text-2xl leading-none">
+                      {spreadsheetData.adjustmentOrder.total >= 0 ? '' : '-'}₱{Math.abs(spreadsheetData.adjustmentOrder.total)}
+                    </span>
+                  </div>
+               </div>
 
-            <section className="flex flex-row items-stretch border-b border-gray-100 dark:border-gray-800 pb-1">
-              <div className="w-4 shrink-0 bg-yellow-400 flex items-center justify-center rounded-l-sm">
-                <span className="text-[8px] font-black text-yellow-900 uppercase tracking-widest whitespace-nowrap" style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}>Extras</span>
-              </div>
-              <div className="flex-1 grid grid-cols-3 gap-0.5 ml-0.5">
-                {MENU.extras.map(item => <ItemButton key={item.id} item={item} />)}
-              </div>
-            </section>
+               {/* Scrollable Adjustments List */}
+               <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
+                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-4xl mx-auto">
+                    {spreadsheetData.adjustmentOrder.items.map(item => (
+                      <div key={item.id} className="flex justify-between items-center bg-white dark:bg-gray-800 p-3 rounded-xl border-2 border-purple-100 dark:border-purple-900/50 shadow-sm hover:shadow-md transition-shadow">
+                        <div className="flex items-center gap-3">
+                          <div className={`w-3 h-3 rounded-full shadow-inner ${item.price >= 0 ? 'bg-red-500 animate-pulse' : 'bg-green-500'}`} />
+                          <div className="flex flex-col">
+                            <span className="text-sm font-black text-gray-800 dark:text-gray-100">
+                              <span className="text-purple-600 dark:text-purple-400 mr-1">{item.qty}x</span> {item.name}
+                            </span>
+                            <span className="text-[9px] text-gray-400 font-bold uppercase tracking-widest">{item.type}</span>
+                          </div>
+                        </div>
+                        <div className={`text-sm font-black px-2 py-1 rounded-lg ${item.price >= 0 ? 'text-red-700 bg-red-50 dark:bg-red-900/20' : 'text-green-700 bg-green-50 dark:bg-green-900/20'}`}>
+                          {item.price * item.qty >= 0 ? '+' : '-'}₱{Math.abs(item.price * item.qty)}
+                        </div>
+                      </div>
+                    ))}
+                 </div>
+               </div>
 
-            <section className="flex flex-row items-stretch border-b border-gray-100 dark:border-gray-800 pb-1">
-              <div className="w-4 shrink-0 bg-blue-500 flex items-center justify-center rounded-l-sm">
-                <span className="text-[8px] font-black text-white uppercase tracking-widest whitespace-nowrap" style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}>Drinks</span>
-              </div>
-              <div className="flex-1 grid grid-cols-3 gap-0.5 ml-0.5">
-                {MENU.drinks.map(item => <ItemButton key={item.id} item={item} />)}
-              </div>
-            </section>
+               {/* Action Footer */}
+               <div className="p-4 bg-white dark:bg-gray-900 border-t dark:border-gray-800 grid grid-cols-2 gap-3 shrink-0">
+                 <button 
+                   onClick={() => setShowReport(true)}
+                   className="py-3 bg-purple-600 text-white font-black rounded-xl shadow-lg hover:bg-purple-700 active:scale-95 transition-all flex items-center justify-center gap-2 border-b-4 border-purple-800"
+                 >
+                   OPEN REPORT SHEET
+                 </button>
+                 <button 
+                   onClick={handleRemoveManualCount}
+                   className="py-3 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 font-black rounded-xl hover:bg-red-100 dark:hover:bg-red-900/40 transition-all border-2 border-red-200 dark:border-red-800 flex items-center justify-center gap-2"
+                 >
+                   CLEAR MANUAL COUNTS
+                 </button>
+               </div>
+            </div>
+          ) : (
+            <div className="max-w-4xl mx-auto flex flex-col gap-1 tutorial-items w-full animate-in fade-in duration-500">
+              
+              <section className="flex flex-row items-stretch border-b border-gray-100 dark:border-gray-800 pb-1">
+                <div className="w-4 shrink-0 bg-red-600 flex items-center justify-center rounded-l-sm">
+                  <span className="text-[8px] font-black text-white uppercase tracking-widest whitespace-nowrap" style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}>Main Orders</span>
+                </div>
+                <div className="flex-1 grid grid-cols-3 gap-0.5 ml-0.5">
+                  {MENU.orders.map(item => <ItemButton key={item.id} item={item} />)}
+                </div>
+              </section>
 
-          </div>
+              <section className="flex flex-row items-stretch border-b border-gray-100 dark:border-gray-800 pb-1">
+                <div className="w-4 shrink-0 bg-yellow-400 flex items-center justify-center rounded-l-sm">
+                  <span className="text-[8px] font-black text-yellow-900 uppercase tracking-widest whitespace-nowrap" style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}>Extras</span>
+                </div>
+                <div className="flex-1 grid grid-cols-3 gap-0.5 ml-0.5">
+                  {MENU.extras.map(item => <ItemButton key={item.id} item={item} />)}
+                </div>
+              </section>
+
+              <section className="flex flex-row items-stretch border-b border-gray-100 dark:border-gray-800 pb-1">
+                <div className="w-4 shrink-0 bg-blue-500 flex items-center justify-center rounded-l-sm">
+                  <span className="text-[8px] font-black text-white uppercase tracking-widest whitespace-nowrap" style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}>Drinks</span>
+                </div>
+                <div className="flex-1 grid grid-cols-3 gap-0.5 ml-0.5">
+                  {MENU.drinks.map(item => <ItemButton key={item.id} item={item} />)}
+                </div>
+              </section>
+
+            </div>
+          )}
         </div>
       </div>
 
@@ -777,20 +898,24 @@ export default function App() {
                 <p className="text-gray-400 text-[10px] sm:text-xs mt-0.5">End calculated: Starting + Deliver - Waste - Sold</p>
               </div>
               <div className="flex gap-2">
-                <label className="p-1.5 hover:bg-gray-800 rounded-full transition-colors flex items-center gap-1 text-xs text-green-400 cursor-pointer">
-                  <Upload size={18} /> <span className="hidden sm:inline">Import</span>
-                  <input type="file" accept=".json" className="hidden" onChange={importJSON} />
-                </label>
-                <button onClick={handleManualPaste} className="p-1.5 hover:bg-gray-800 rounded-full transition-colors flex items-center gap-1 text-xs text-blue-300">
+                <button 
+                  onClick={handleManualPaste} 
+                  className="p-2 hover:bg-gray-800 rounded-lg transition-all flex items-center gap-1.5 text-xs text-blue-400 border border-blue-400/30"
+                >
                   <ClipboardPaste size={18} /> <span className="hidden sm:inline">Paste</span>
                 </button>
-                <select onChange={(e) => { if(e.target.value) exportData(e.target.value); e.target.value=''; }} className="p-1.5 bg-gray-800 rounded-full transition-colors text-xs text-gray-200 border-none outline-none focus:ring-2 focus:ring-yellow-400">
-                  <option value="">⬇ Export</option>
-                  <option value="xlsx">Excel (.xlsx)</option>
-                  <option value="csv">CSV (.csv)</option>
-                  <option value="pdf">PDF (.pdf)</option>
-                  <option value="json">Backup (.json)</option>
-                </select>
+                <button 
+                  onClick={() => setShowImportModal(true)} 
+                  className="p-2 hover:bg-gray-800 rounded-lg transition-all flex items-center gap-1.5 text-xs text-green-400 border border-green-400/30"
+                >
+                  <Upload size={18} /> <span className="hidden sm:inline">Import</span>
+                </button>
+                <button 
+                  onClick={() => setShowExportModal(true)} 
+                  className="p-2 bg-yellow-400 text-yellow-900 rounded-lg transition-all flex items-center gap-1.5 text-xs font-black shadow-sm active:scale-95 border-b-2 border-yellow-600"
+                >
+                  <Download size={18} /> <span className="hidden sm:inline">Export</span>
+                </button>
                 <button onClick={() => setShowReport(false)} className="p-1.5 hover:bg-gray-800 rounded-full transition-colors">
                   <X size={20} />
                 </button>
@@ -861,9 +986,27 @@ export default function App() {
                         />
                       </td>
                       
-                      {/* Calculated Columns */}
-                      <td className="p-2 border-r border-gray-200 text-center font-black text-green-700 bg-green-50/50">{row.ending}</td>
-                      <td className="p-2 border-r border-gray-200 text-center font-bold text-blue-600 bg-gray-50">{row.sold}</td>
+                      {/* Calculated / Override Columns */}
+                      <td className="p-0 border-r border-gray-200 bg-green-50/20 dark:bg-green-50/5">
+                        <input 
+                          type="number" 
+                          data-row={idx}
+                          data-field="endingOverride"
+                          onKeyDown={(e) => handleTableKeyDown(e, idx, 'endingOverride')}
+                          onFocus={() => setLastActiveCell({rowIdx: idx, field: 'endingOverride'})}
+                          value={inventory[row.name]?.endingOverride ?? ''}
+                          onChange={(e) => handleInventoryInput(row.name, 'endingOverride', e.target.value)}
+                          className={`w-full h-full p-2 text-center bg-transparent focus:bg-white dark:focus:bg-gray-800 focus:outline-none focus:ring-1 focus:ring-green-500 font-extrabold [&::-webkit-inner-spin-button]:appearance-none transition-colors
+                            ${row.hasOverride ? 'text-purple-600 dark:text-purple-400' : 'text-green-700 dark:text-green-600'}
+                          `}
+                          placeholder={row.theoreticalEnding}
+                        />
+                      </td>
+                      <td className={`p-2 border-r border-gray-200 text-center font-bold bg-gray-50 dark:bg-gray-800/40 transition-colors
+                        ${row.missingQty !== 0 ? 'text-purple-600 dark:text-purple-400' : 'text-blue-600 dark:text-blue-400'}
+                      `}>
+                        {row.finalSold}
+                      </td>
                       <td className="p-2 border-r border-gray-200 dark:border-gray-700 text-right text-gray-500 dark:text-gray-400">{row.price}</td>
                       <td className="p-2 text-right font-bold text-gray-800 dark:text-gray-200 bg-gray-50 dark:bg-gray-800">₱{row.sales}</td>
                     </tr>
@@ -1256,6 +1399,105 @@ export default function App() {
               >
                 APPLY DATA
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ================= IMPORT MODAL (POPUP) ================= */}
+      {showImportModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[110] p-4 animate-in fade-in">
+          <div className="bg-white dark:bg-gray-900 rounded-3xl shadow-2xl w-full max-w-sm overflow-hidden animate-in zoom-in duration-200 border border-gray-200 dark:border-gray-800">
+            <div className="p-6 bg-green-500 text-white">
+               <h2 className="text-2xl font-black uppercase tracking-tighter flex items-center gap-2">
+                 <Upload size={24} /> Import Data
+               </h2>
+               <p className="text-[10px] uppercase font-black opacity-80 tracking-widest mt-1">Restore your shift state from backup</p>
+            </div>
+            
+            <div className="p-8 flex flex-col items-center justify-center text-center">
+              <label className="w-full flex flex-col items-center justify-center p-10 border-4 border-dashed border-green-100 dark:border-green-900/50 rounded-3xl hover:bg-green-50 dark:hover:bg-green-900/10 transition-all cursor-pointer group">
+                <Upload size={48} className="text-green-500 mb-4 group-hover:scale-110 transition-transform" />
+                <span className="text-sm font-black text-gray-800 dark:text-gray-100 uppercase tracking-tight">Tap to Select Backup</span>
+                <span className="text-[10px] text-gray-400 font-bold mt-1">Only .JSON files are supported</span>
+                <input 
+                  type="file" 
+                  accept=".json" 
+                  className="hidden" 
+                  onChange={(e) => { 
+                    importJSON(e); 
+                    setShowImportModal(false); 
+                  }} 
+                />
+              </label>
+
+              <div className="mt-6 text-left w-full space-y-2">
+                <p className="text-[10px] text-gray-500 font-bold uppercase tracking-widest border-b dark:border-gray-800 pb-1">What's included in backup:</p>
+                <div className="flex items-center gap-2 text-[11px] text-gray-600 dark:text-gray-400 font-bold">
+                  <CheckCircle2 size={12} className="text-green-500" /> Active Orders & History
+                </div>
+                <div className="flex items-center gap-2 text-[11px] text-gray-600 dark:text-gray-400 font-bold">
+                  <CheckCircle2 size={12} className="text-green-500" /> Inventory & Manual Counts
+                </div>
+                <div className="flex items-center gap-2 text-[11px] text-gray-600 dark:text-gray-400 font-bold">
+                  <CheckCircle2 size={12} className="text-green-500" /> Shift Revenue Statistics
+                </div>
+              </div>
+            </div>
+
+            <div className="p-4 bg-gray-50 dark:bg-gray-800 border-t dark:border-gray-700">
+               <button 
+                 onClick={() => setShowImportModal(false)}
+                 className="w-full py-3 bg-white dark:bg-gray-700 text-gray-500 dark:text-gray-200 font-black rounded-xl border border-gray-200 dark:border-gray-600 hover:bg-gray-100 active:scale-95 transition-all text-xs"
+               >
+                 CANCEL
+               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ================= EXPORT MODAL (POPUP) ================= */}
+      {showExportModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[110] p-4 animate-in fade-in">
+          <div className="bg-white dark:bg-gray-900 rounded-3xl shadow-2xl w-full max-w-sm overflow-hidden animate-in zoom-in duration-200 border border-gray-200 dark:border-gray-800">
+            <div className="p-6 bg-yellow-400 text-yellow-900">
+               <h2 className="text-2xl font-black uppercase tracking-tighter flex items-center gap-2">
+                 <Download size={24} /> Export Options
+               </h2>
+               <p className="text-[10px] uppercase font-black opacity-60 tracking-widest mt-1">Select your preferred file format</p>
+            </div>
+            
+            <div className="p-4 grid grid-cols-1 gap-2">
+              {[
+                { id: 'xlsx', name: 'Excel Spreadsheet', desc: '.xlsx format for analysis', icon: <FileText className="text-green-600" /> },
+                { id: 'pdf', name: 'PDF Document', desc: '.pdf for printing/viewing', icon: <FileText className="text-red-600" /> },
+                { id: 'csv', name: 'CSV File', desc: '.csv for lightweight data', icon: <FileText className="text-blue-600" /> },
+                { id: 'json', name: 'System Backup', desc: '.json for app restoration', icon: <History className="text-purple-600" /> }
+              ].map((opt) => (
+                <button 
+                  key={opt.id}
+                  onClick={() => { exportData(opt.id); setShowExportModal(false); }}
+                  className="flex items-center gap-4 p-4 rounded-2xl hover:bg-gray-100 dark:hover:bg-gray-800 transition-all active:scale-95 group text-left border border-transparent hover:border-gray-200 dark:hover:border-gray-700"
+                >
+                  <div className="bg-gray-50 dark:bg-gray-900 p-3 rounded-xl group-hover:bg-white dark:group-hover:bg-gray-700 shadow-sm transition-colors">
+                    {opt.icon}
+                  </div>
+                  <div className="flex flex-col">
+                    <span className="font-black text-gray-800 dark:text-gray-100">{opt.name}</span>
+                    <span className="text-[10px] text-gray-400 font-bold uppercase">{opt.desc}</span>
+                  </div>
+                </button>
+              ))}
+            </div>
+
+            <div className="p-4 bg-gray-50 dark:bg-gray-800 border-t dark:border-gray-700">
+               <button 
+                 onClick={() => setShowExportModal(false)}
+                 className="w-full py-3 bg-white dark:bg-gray-700 text-gray-500 dark:text-gray-200 font-black rounded-xl border border-gray-200 dark:border-gray-600 hover:bg-gray-100 active:scale-95 transition-all text-xs"
+               >
+                 CANCEL
+               </button>
             </div>
           </div>
         </div>
