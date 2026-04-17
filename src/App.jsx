@@ -121,6 +121,23 @@ export default function App() {
   const [toast, setToast] = useState("");
   const [pasteModal, setPasteModal] = useState(false);
   const [manualPasteText, setManualPasteText] = useState("");
+  const [deferredInstallPrompt, setDeferredInstallPrompt] = useState(null);
+  const [isAppInstalled, setIsAppInstalled] = useState(false);
+
+  useEffect(() => {
+    const handler = (e) => { e.preventDefault(); setDeferredInstallPrompt(e); };
+    window.addEventListener('beforeinstallprompt', handler);
+    window.addEventListener('appinstalled', () => { setIsAppInstalled(true); setDeferredInstallPrompt(null); });
+    if (window.matchMedia('(display-mode: standalone)').matches) setIsAppInstalled(true);
+    return () => window.removeEventListener('beforeinstallprompt', handler);
+  }, []);
+
+  const handleInstallClick = async () => {
+    if (!deferredInstallPrompt) return;
+    deferredInstallPrompt.prompt();
+    const { outcome } = await deferredInstallPrompt.userChoice;
+    if (outcome === 'accepted') { setIsAppInstalled(true); setDeferredInstallPrompt(null); }
+  };
 
 
   useEffect(() => {
@@ -636,14 +653,14 @@ export default function App() {
                     : 'border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-800 hover:border-yellow-300 dark:hover:border-yellow-600 opacity-80 hover:opacity-100'
                 }`}
               >
-                <div className="flex justify-between items-center mb-2 border-b border-gray-100 dark:border-gray-800 pb-1">
-                  <span className={`font-black text-sm ${isActive ? 'text-red-600' : 'text-gray-700'}`}>
+                <div className="flex justify-between items-center mb-2 border-b border-gray-100 dark:border-gray-700 pb-1">
+                  <span className={`font-black text-sm ${isActive ? 'text-red-600' : 'text-gray-700 dark:text-gray-300'}`}>
                     #{order.id}
                   </span>
-                  <span className={`font-black text-xl sm:text-2xl pt-1 ${isActive ? 'text-red-700' : 'text-gray-800'}`}>
+                  <span className={`font-black text-xl sm:text-2xl pt-1 ${isActive ? 'text-red-700' : 'text-gray-800 dark:text-gray-200'}`}>
                     ₱{order.total}
                   </span>
-                  <span className="text-[10px] text-gray-400 font-bold shrink-0">
+                  <span className="text-[10px] text-gray-400 dark:text-gray-500 font-bold shrink-0">
                     {new Date(order.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                   </span>
                 </div>
@@ -847,7 +864,7 @@ export default function App() {
                       {/* Calculated Columns */}
                       <td className="p-2 border-r border-gray-200 text-center font-black text-green-700 bg-green-50/50">{row.ending}</td>
                       <td className="p-2 border-r border-gray-200 text-center font-bold text-blue-600 bg-gray-50">{row.sold}</td>
-                      <td className="p-2 border-r border-gray-200 text-right text-gray-500">{row.price}</td>
+                      <td className="p-2 border-r border-gray-200 dark:border-gray-700 text-right text-gray-500 dark:text-gray-400">{row.price}</td>
                       <td className="p-2 text-right font-bold text-gray-800 dark:text-gray-200 bg-gray-50 dark:bg-gray-800">₱{row.sales}</td>
                     </tr>
                   ))}
@@ -855,9 +872,9 @@ export default function App() {
               </table>
             </div>
 
-            <div className="p-3 sm:p-4 bg-gray-100 border-t flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-inner">
+            <div className="p-3 sm:p-4 bg-gray-100 dark:bg-gray-900 border-t dark:border-gray-700 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-inner">
               <div className="bg-white dark:bg-gray-800 px-4 py-2 rounded-lg border dark:border-gray-700 shadow-sm">
-                <p className="text-gray-500 font-bold uppercase text-[10px] sm:text-xs mb-0.5">Calculated Total Sales</p>
+                <p className="text-gray-500 dark:text-gray-400 font-bold uppercase text-[10px] sm:text-xs mb-0.5">Calculated Total Sales</p>
                 <p className="text-xl sm:text-3xl font-black text-green-600">₱{spreadsheetData.grandTotalSales}</p>
               </div>
               <button 
@@ -875,11 +892,11 @@ export default function App() {
       {/* ================= CUSTOM VALUE MODAL ================= */}
       {customModal.isOpen && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm flex flex-col overflow-hidden animate-in zoom-in duration-200">
+        <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-2xl w-full max-w-sm flex flex-col overflow-hidden animate-in zoom-in duration-200 border border-gray-200 dark:border-gray-800">
             <div className={`p-4 text-white font-black text-center ${customModal.isRemoving ? 'bg-red-600' : 'bg-yellow-500'}`}>
               <h2 className="text-xl uppercase tracking-widest">{customModal.isRemoving ? 'Remove Custom' : 'Add Custom Amount'}</h2>
             </div>
-            <div className="p-6">
+            <div className="p-6 dark:bg-gray-900">
               <input 
                 type="number"
                 inputMode="numeric"
@@ -887,13 +904,13 @@ export default function App() {
                 value={customValue}
                 onChange={(e) => setCustomValue(e.target.value)}
                 placeholder="Enter amount (₱)"
-                className="w-full text-center text-4xl font-black text-gray-800 p-4 rounded-xl border-2 border-gray-200 focus:border-yellow-400 focus:ring-4 focus:ring-yellow-400/20 outline-none transition-all"
+                className="w-full text-center text-4xl font-black text-gray-800 dark:text-gray-100 p-4 rounded-xl border-2 border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 focus:border-yellow-400 focus:ring-4 focus:ring-yellow-400/20 outline-none transition-all"
               />
             </div>
-            <div className="p-4 bg-gray-50 border-t flex gap-3">
+            <div className="p-4 bg-gray-50 dark:bg-gray-800 border-t dark:border-gray-700 flex gap-3">
               <button 
                 onClick={() => { setCustomModal({ isOpen: false, isRemoving: false }); setCustomValue(""); }}
-                className="flex-1 py-3 font-bold text-gray-600 bg-gray-200 rounded-xl hover:bg-gray-300 active:scale-95 transition-all"
+                className="flex-1 py-3 font-bold text-gray-600 dark:text-gray-300 bg-gray-200 dark:bg-gray-700 rounded-xl hover:bg-gray-300 dark:hover:bg-gray-600 active:scale-95 transition-all"
               >
                 CANCEL
               </button>
@@ -967,19 +984,19 @@ export default function App() {
             <div className="flex border-b dark:border-gray-800">
               <button 
                 onClick={() => setSettingsTab('general')}
-                className={`flex-1 py-3 text-sm font-bold transition-colors ${settingsTab === 'general' ? 'text-blue-600 border-b-2 border-blue-600 bg-blue-50 dark:bg-blue-900/20' : 'text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800'}`}
+                className={`flex-1 py-3 text-sm font-bold transition-colors ${settingsTab === 'general' ? 'text-blue-600 border-b-2 border-blue-600 bg-blue-50 dark:bg-blue-900/20' : 'text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800'}`}
               >
                 General Config
               </button>
               <button 
                 onClick={() => setSettingsTab('prices')}
-                className={`flex-1 py-3 text-sm font-bold transition-colors ${settingsTab === 'prices' ? 'text-blue-600 border-b-2 border-blue-600 bg-blue-50 dark:bg-blue-900/20' : 'text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800'}`}
+                className={`flex-1 py-3 text-sm font-bold transition-colors ${settingsTab === 'prices' ? 'text-blue-600 border-b-2 border-blue-600 bg-blue-50 dark:bg-blue-900/20' : 'text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800'}`}
               >
                 Item Prices (Overrides)
               </button>
               <button 
                 onClick={() => setSettingsTab('recipes')}
-                className={`flex-1 py-3 text-sm font-bold transition-colors ${settingsTab === 'recipes' ? 'text-blue-600 border-b-2 border-blue-600 bg-blue-50 dark:bg-blue-900/20' : 'text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800'}`}
+                className={`flex-1 py-3 text-sm font-bold transition-colors ${settingsTab === 'recipes' ? 'text-blue-600 border-b-2 border-blue-600 bg-blue-50 dark:bg-blue-900/20' : 'text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800'}`}
               >
                 Recipe Ingredients
               </button>
@@ -1026,6 +1043,26 @@ export default function App() {
                       </button>
                     </div>
                   </div>
+
+                  {/* Install App */}
+                  {!isAppInstalled && deferredInstallPrompt && (
+                    <div>
+                      <h3 className="font-bold text-gray-800 dark:text-gray-200 mb-3 uppercase text-xs tracking-wider">Install App</h3>
+                      <button
+                        onClick={handleInstallClick}
+                        className="w-full py-3 bg-gradient-to-r from-red-600 to-red-500 text-white font-black rounded-xl shadow-md hover:from-red-700 hover:to-red-600 active:scale-95 transition-all flex items-center justify-center gap-2"
+                      >
+                        <Download size={18} /> Install Angel's POS to Home Screen
+                      </button>
+                      <p className="text-[10px] text-gray-400 dark:text-gray-500 mt-2 text-center">Installs as a fullscreen app — no browser bar.</p>
+                    </div>
+                  )}
+                  {isAppInstalled && (
+                    <div className="flex items-center gap-2 p-3 bg-green-50 dark:bg-green-900/20 rounded-xl border border-green-200 dark:border-green-800">
+                      <CheckCircle2 size={18} className="text-green-600 shrink-0" />
+                      <p className="text-xs font-bold text-green-700 dark:text-green-400">App is installed on this device.</p>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -1037,10 +1074,10 @@ export default function App() {
                   
                   <div className="grid sm:grid-cols-2 gap-6">
                     <div>
-                      <h3 className="font-black border-b pb-1 mb-2 dark:border-gray-700 text-sm">Menu Orders</h3>
+                      <h3 className="font-black border-b pb-1 mb-2 dark:border-gray-700 text-sm text-gray-800 dark:text-gray-200">Menu Orders</h3>
                       {MENU.orders.map(item => (
                         <div key={item.id} className="flex justify-between items-center mb-1 bg-gray-50 dark:bg-gray-800 p-1 rounded">
-                          <span className="text-xs font-bold">{item.name} <span className="text-[9px] text-gray-400 font-normal">({item.price})</span></span>
+                          <span className="text-xs font-bold text-gray-800 dark:text-gray-200">{item.name} <span className="text-[9px] text-gray-400 font-normal">({item.price})</span></span>
                           <input 
                             type="number" 
                             className="w-16 bg-white dark:bg-gray-900 border dark:border-gray-700 rounded p-1 text-xs text-right focus:outline-none focus:ring-1 focus:ring-blue-500 dark:text-white"
@@ -1060,10 +1097,10 @@ export default function App() {
                       ))}
                     </div>
                     <div>
-                      <h3 className="font-black border-b pb-1 mb-2 dark:border-gray-700 text-sm">Spreadsheet Ingredients</h3>
+                      <h3 className="font-black border-b pb-1 mb-2 dark:border-gray-700 text-sm text-gray-800 dark:text-gray-200">Spreadsheet Ingredients</h3>
                       {Object.entries(INGREDIENTS_DB).map(([name, defaultP]) => (
                         <div key={name} className="flex justify-between items-center mb-1 bg-gray-50 dark:bg-gray-800 p-1 rounded">
-                          <span className="text-xs font-bold">{name} <span className="text-[9px] text-gray-400 font-normal">({defaultP})</span></span>
+                          <span className="text-xs font-bold text-gray-800 dark:text-gray-200">{name} <span className="text-[9px] text-gray-400 font-normal">({defaultP})</span></span>
                           <input 
                             type="number" 
                             className="w-16 bg-white dark:bg-gray-900 border dark:border-gray-700 rounded p-1 text-xs text-right focus:outline-none focus:ring-1 focus:ring-blue-500 dark:text-white"
