@@ -44,6 +44,9 @@ import {
   query,
   where,
   getDocs,
+  addDoc,
+  orderBy,
+  limit,
 } from 'firebase/firestore';
 
 import { auth, db, googleProvider } from './firebase';
@@ -440,7 +443,7 @@ const MenuGrid = ({
 const ReportModal = ({
   storeConfig, inventory, handleInventoryInput, spreadsheetData,
   setShowReport, handleManualPaste, setShowImportModal, setShowExportModal,
-  setLastActiveCell, handleTableKeyDown, handleTablePaste, handleClearDataClick,
+  setLastActiveCell, handleTableKeyDown, handleTablePaste, handleEndShift,
 }) => (
   <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-2 sm:p-4">
     <div className="bg-white dark:bg-gray-900 rounded-xl shadow-2xl w-full max-w-5xl flex flex-col max-h-[95vh] overflow-hidden animate-in fade-in zoom-in duration-200 border border-gray-200 dark:border-gray-800">
@@ -491,7 +494,7 @@ const ReportModal = ({
           <p className="text-gray-500 dark:text-gray-400 font-bold uppercase text-[10px] sm:text-xs mb-0.5">Calculated Total Sales</p>
           <p className="text-xl sm:text-3xl font-black text-green-600">₱{spreadsheetData.grandTotalSales}</p>
         </div>
-        <button onClick={handleClearDataClick} className="px-4 py-2 bg-red-600 text-white text-[10px] sm:text-xs font-bold rounded-lg hover:bg-red-700 transition-colors shadow-md">START NEW SHIFT (CLEAR DATA)</button>
+        <button onClick={handleEndShift} className="px-4 py-3 bg-red-600 hover:bg-red-700 text-white font-black rounded-xl shadow-lg transition-all active:scale-95 uppercase tracking-wider text-xs sm:text-sm border-b-4 border-red-800">End Shift &amp; Save Report</button>
       </div>
     </div>
   </div>
@@ -501,6 +504,12 @@ const ReportModal = ({
 // POS APP  (the actual point-of-sale engine)
 // =============================================================================
 function POSApp({ shopId, userRole, memberships, user, onSwitchShop, onLogout }) {
+
+  // --- PHASE 4: SHIFT FLOW STATES ---
+  const [shiftStarted, setShiftStarted] = useState(false);
+  const [lastReport, setLastReport] = useState(null);
+  const [hasLocalActiveShift, setHasLocalActiveShift] = useState(false);
+  const [setupLoading, setSetupLoading] = useState(true);
 
   // --- CORE APP STATE ---
   const [time, setTime] = useState(new Date());
@@ -515,18 +524,11 @@ function POSApp({ shopId, userRole, memberships, user, onSwitchShop, onLogout })
     const saved = localStorage.getItem(`pos_storeConfig_${shopId}`);
     return saved ? JSON.parse(saved) : null;
   });
-  const [orders, setOrders] = useState(() => {
-    const saved = localStorage.getItem(`pos_orders_${shopId}`);
-    return saved ? JSON.parse(saved) : [{ id: 1, items: [], total: 0, timestamp: Date.now() }];
-  });
-  const [activeOrderId, setActiveOrderId] = useState(() => {
-    const saved = localStorage.getItem(`pos_activeOrderId_${shopId}`);
-    return saved ? JSON.parse(saved) : 1;
-  });
-  const [inventory, setInventory] = useState(() => {
-    const saved = localStorage.getItem(`pos_inventory_${shopId}`);
-    return saved ? JSON.parse(saved) : {};
-  });
+  // orders/inventory/activeOrderId are initialized to defaults;
+  // they get hydrated by the shift setup screen, not from localStorage directly.
+  const [orders, setOrders] = useState([{ id: 1, items: [], total: 0, timestamp: Date.now() }]);
+  const [activeOrderId, setActiveOrderId] = useState(1);
+  const [inventory, setInventory] = useState({});
 
   // --- UI STATE ---
   const [isAddMode, setIsAddMode] = useState(true);
@@ -577,6 +579,34 @@ function POSApp({ shopId, userRole, memberships, user, onSwitchShop, onLogout })
   }, [memberships, shopId]);
 
   // ==========================================================================
+  // PHASE 4: INITIALIZATION HOOK — runs on mount / shopId change
+  // ==========================================================================
+  useEffect(() => {
+    const initShift = async () => {
+      setSetupLoading(true);
+      // 1. Check for a locally-saved active shift
+      const localRaw = localStorage.getItem(`pos_active_shift_${shopId}`);
+      setHasLocalActiveShift(!!localRaw);
+      // 2. Fetch the most recent Firestore shift report
+      try {
+        const q = query(
+          collection(db, 'shops', shopId, 'shift_reports'),
+          orderBy('timestamp', 'desc'),
+          limit(1)
+        );
+        const snap = await getDocs(q);
+        if (!snap.empty) setLastReport(snap.docs[0].data());
+        else setLastReport(null);
+      } catch (err) {
+        console.warn('Could not fetch last report:', err.message);
+        setLastReport(null);
+      }
+      setSetupLoading(false);
+    };
+    initShift();
+  }, [shopId]);
+
+  // ==========================================================================
   // EFFECTS
   // ==========================================================================
   useEffect(() => {
@@ -611,11 +641,16 @@ function POSApp({ shopId, userRole, memberships, user, onSwitchShop, onLogout })
     return () => clearInterval(timer);
   }, []);
 
+  // ==========================================================================
+  // PHASE 4: LOCAL AUTO-SAVE — replaces per-key cloud sync
+  // ==========================================================================
   useEffect(() => {
-    localStorage.setItem(`pos_orders_${shopId}`, JSON.stringify(orders));
-    localStorage.setItem(`pos_activeOrderId_${shopId}`, JSON.stringify(activeOrderId));
-    localStorage.setItem(`pos_inventory_${shopId}`, JSON.stringify(inventory));
-  }, [orders, activeOrderId, inventory, shopId]);
+    if (!shiftStarted) return;
+    localStorage.setItem(
+      `pos_active_shift_${shopId}`,
+      JSON.stringify({ orders, inventory, activeOrderId })
+    );
+  }, [orders, inventory, activeOrderId, shiftStarted, shopId]);
 
   useEffect(() => {
     if (ordersEndRef.current) ordersEndRef.current.scrollIntoView({ behavior: 'smooth' });
@@ -727,7 +762,7 @@ function POSApp({ shopId, userRole, memberships, user, onSwitchShop, onLogout })
   // ==========================================================================
   // LOGIC: REPORT / DATA
   // ==========================================================================
-  const handleClearDataClick = () => setClearConfirmModal(true);
+  // Legacy clear (used only by clearConfirmModal internal flow)
   const confirmClearData = () => {
     setOrders([{ id: 1, items: [], total: 0, timestamp: Date.now() }]);
     setActiveOrderId(1);
@@ -736,6 +771,44 @@ function POSApp({ shopId, userRole, memberships, user, onSwitchShop, onLogout })
     setClearConfirmModal(false);
   };
   const backupAndClear = () => { exportData('json'); confirmClearData(); };
+
+  // ==========================================================================
+  // PHASE 4: END OF SHIFT — compile report, push to Firestore, reset device
+  // ==========================================================================
+  const handleEndShift = async () => {
+    if (!window.confirm('End Shift & Save Report? This will push data to the cloud and reset this device.')) return;
+    setToast('Saving report to cloud...');
+    try {
+      const inventorySnapshot = {};
+      spreadsheetData.rows.forEach(row => {
+        inventorySnapshot[row.name] = {
+          start:       row.start,
+          deliver:     row.deliver,
+          waste:       row.waste,
+          sold:        row.finalSold,
+          finalEnding: row.finalEnding,
+        };
+      });
+      const shift_report = {
+        timestamp: Date.now(),
+        savedBy: { uid: user.uid, name: user.displayName || user.email },
+        sales: { total: spreadsheetData.grandTotalSales },
+        inventorySnapshot,
+      };
+      await addDoc(collection(db, 'shops', shopId, 'shift_reports'), shift_report);
+      // Wipe local data only after successful cloud save
+      localStorage.removeItem(`pos_active_shift_${shopId}`);
+      setOrders([{ id: 1, items: [], total: 0, timestamp: Date.now() }]);
+      setInventory({});
+      setActiveOrderId(1);
+      setShowReport(false);
+      setShiftStarted(false);   // returns user to Setup Screen
+      setToast('Shift saved successfully! ✓');
+    } catch (err) {
+      console.error('End-shift save error:', err);
+      setToast('Cloud save failed — export a JSON backup first.');
+    }
+  };
 
   const exportData = (format) => {
     const timestamp = new Date().toLocaleDateString().replace(/\//g, '-');
@@ -837,6 +910,148 @@ function POSApp({ shopId, userRole, memberships, user, onSwitchShop, onLogout })
       return nextInv;
     });
   };
+
+  // ==========================================================================
+  // PHASE 4: BLOCKING RENDERS — loading spinner & shift setup screen
+  // ==========================================================================
+  if (setupLoading) {
+    return (
+      <div className="h-[100dvh] w-full flex flex-col items-center justify-center bg-gray-950">
+        <Loader2 size={40} className="text-red-500 animate-spin" />
+        <p className="text-gray-600 font-bold text-xs uppercase tracking-widest mt-3">Loading shift data...</p>
+      </div>
+    );
+  }
+
+  if (!shiftStarted) {
+    return (
+      <div className="min-h-[100dvh] w-full bg-gray-100 flex flex-col items-center justify-center p-4 font-sans">
+        <div className="bg-white rounded-2xl shadow-xl border border-gray-200 max-w-md w-full text-center space-y-6 relative overflow-hidden">
+          {/* Red accent bar */}
+          <div className="absolute top-0 left-0 w-full h-1.5 bg-red-600" />
+
+          <div className="px-6 sm:px-8 pt-10 pb-8 space-y-6">
+            {/* ── Condition A: local unfinished shift ── */}
+            {hasLocalActiveShift ? (
+              <>
+                <div className="flex justify-center">
+                  <div className="bg-yellow-100 p-5 rounded-full">
+                    <Clock className="w-12 h-12 text-yellow-500" />
+                  </div>
+                </div>
+                <div>
+                  <h1 className="text-2xl font-black text-gray-800 uppercase tracking-tight">Unfinished Shift Found</h1>
+                  <p className="text-gray-500 font-bold text-sm mt-1">There is an active shift saved on this device. Resume or discard it.</p>
+                </div>
+                <div className="flex flex-col gap-3">
+                  <button
+                    onClick={() => {
+                      try {
+                        const data = JSON.parse(localStorage.getItem(`pos_active_shift_${shopId}`));
+                        if (data) {
+                          setOrders(data.orders);
+                          setInventory(data.inventory);
+                          setActiveOrderId(data.activeOrderId);
+                        }
+                      } catch (_) {}
+                      setShiftStarted(true);
+                    }}
+                    className="w-full py-4 bg-yellow-500 hover:bg-yellow-600 text-white font-black rounded-xl shadow-lg transition-all active:scale-95 border-b-4 border-yellow-700 uppercase tracking-widest text-sm"
+                  >
+                    Resume Active Shift
+                  </button>
+                  <button
+                    onClick={() => {
+                      localStorage.removeItem(`pos_active_shift_${shopId}`);
+                      setHasLocalActiveShift(false);
+                      setOrders([{ id: 1, items: [], total: 0, timestamp: Date.now() }]);
+                      setInventory({});
+                      setActiveOrderId(1);
+                    }}
+                    className="w-full py-3 bg-red-50 hover:bg-red-100 text-red-600 font-black rounded-xl transition-all border-2 border-red-200 text-sm"
+                  >
+                    Discard Local Data
+                  </button>
+                </div>
+              </>
+            ) : lastReport ? (
+              /* ── Condition B: no local shift, last Firebase report exists ── */
+              <>
+                <div className="flex justify-center">
+                  <div className="bg-blue-100 p-5 rounded-full">
+                    <Store className="w-12 h-12 text-blue-500" />
+                  </div>
+                </div>
+                <div>
+                  <h1 className="text-2xl font-black text-gray-800 uppercase tracking-tight">Ready to Start?</h1>
+                  <p className="text-gray-500 font-bold text-sm mt-1">
+                    Last closing report by{' '}
+                    <span className="text-blue-600 font-black">{lastReport.savedBy?.name || 'a teammate'}</span>.
+                  </p>
+                </div>
+                <div className="flex flex-col gap-3">
+                  <button
+                    onClick={() => {
+                      const newInventory = {};
+                      if (lastReport.inventorySnapshot) {
+                        Object.entries(lastReport.inventorySnapshot).forEach(([name, data]) => {
+                          newInventory[name] = { starting: data.finalEnding ?? '', deliver: '', waste: '' };
+                        });
+                      }
+                      setInventory(newInventory);
+                      setOrders([{ id: 1, items: [], total: 0, timestamp: Date.now() }]);
+                      setActiveOrderId(1);
+                      setShiftStarted(true);
+                    }}
+                    className="w-full py-4 bg-blue-600 hover:bg-blue-700 text-white font-black rounded-xl shadow-lg transition-all active:scale-95 border-b-4 border-blue-800 uppercase tracking-widest text-sm"
+                  >
+                    Continue from Last Report
+                  </button>
+                  <button
+                    onClick={() => {
+                      setInventory({});
+                      setOrders([{ id: 1, items: [], total: 0, timestamp: Date.now() }]);
+                      setActiveOrderId(1);
+                      setShiftStarted(true);
+                    }}
+                    className="w-full py-3 bg-white border-2 border-gray-200 hover:border-blue-400 hover:bg-blue-50 text-gray-700 font-black rounded-xl transition-all text-sm"
+                  >
+                    Start Fresh (Zeros)
+                  </button>
+                </div>
+              </>
+            ) : (
+              /* ── Condition C: first-ever shift ── */
+              <>
+                <div className="flex justify-center">
+                  <div className="bg-green-100 p-5 rounded-full">
+                    <Plus className="w-12 h-12 text-green-500" />
+                  </div>
+                </div>
+                <div>
+                  <h1 className="text-2xl font-black text-gray-800 uppercase tracking-tight">Welcome to Biz POS</h1>
+                  <p className="text-gray-500 font-bold text-sm mt-1">No previous shift history found. Start your first shift below.</p>
+                </div>
+                <div className="flex flex-col gap-3">
+                  <button
+                    onClick={() => {
+                      setOrders([{ id: 1, items: [], total: 0, timestamp: Date.now() }]);
+                      setInventory({});
+                      setActiveOrderId(1);
+                      setShiftStarted(true);
+                    }}
+                    className="w-full py-4 bg-green-500 hover:bg-green-600 text-white font-black rounded-xl shadow-lg transition-all active:scale-95 border-b-4 border-green-700 uppercase tracking-widest text-sm"
+                  >
+                    Start First Shift
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   // ==========================================================================
   // RENDER: NO STORE CONFIG LOADED
@@ -1152,7 +1367,7 @@ function POSApp({ shopId, userRole, memberships, user, onSwitchShop, onLogout })
           setShowReport={setShowReport} handleManualPaste={handleManualPaste}
           setShowImportModal={setShowImportModal} setShowExportModal={setShowExportModal}
           setLastActiveCell={setLastActiveCell} handleTableKeyDown={handleTableKeyDown}
-          handleTablePaste={handleTablePaste} handleClearDataClick={handleClearDataClick}
+          handleTablePaste={handleTablePaste} handleEndShift={handleEndShift}
         />
       )}
 
