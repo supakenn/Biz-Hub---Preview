@@ -1,316 +1,117 @@
-# Angel's POS — Complete Documentation
+# Biz POS — Complete Documentation for LLMs & Developers
 
 > **Vibecoded and deployed by Kenn Egway**  
 > Live URL: https://angels-pos.web.app  
-> Stack: React + Vite + Tailwind CSS + Firebase Hosting
+> Stack: React + Vite + Tailwind CSS + Firebase (Auth/Firestore)
 
 ---
 
-## Table of Contents
+## 1. Project Overview
 
-1. [Overview](#overview)
-2. [Installation & Local Development](#installation--local-development)
-3. [PWA Installation](#pwa-installation)
-4. [Main Interface](#main-interface)
-5. [Order Management](#order-management)
-6. [Report Sheet](#report-sheet)
-7. [System Settings](#system-settings)
-8. [Data Management](#data-management)
-9. [Export & Import](#export--import)
-10. [Deployment](#deployment)
-11. [Project Structure](#project-structure)
-12. [Data Architecture](#data-architecture)
-13. [Troubleshooting](#troubleshooting)
+**Biz POS** is a multi-tenant, offline-first Point of Sale (POS) SaaS designed primarily for small to medium food service businesses. It enables owners to manage multiple shops, assign staff, track high-precision inventory through a "Manual Count Engine," and generate cloud-synced shift reports.
 
 ---
 
-## Overview
+## 2. System Architecture & Flow
 
-**Angel's POS** is a lightweight, offline-capable Point of Sale system built as a Progressive Web App (PWA). Designed for small food stalls and canteens to:
+### Component Hierarchy
+1.  **`App` (Entry Point)**: Handles Firebase Auth state.
+2.  **`AuthWrapper`**: Routes users based on their status:
+    - `splash`: Not logged in.
+    - `no-membership`: Logged in but has no shops.
+    - `create-shop` / `join-shop`: Onboarding flows.
+    - `shop-select`: Multi-shop selection dashboard.
+3.  **`POSApp`**: The main engine, rendered only after a `shopId` is selected.
+4.  **`ShiftSetup` (Blocking UI)**: Gated entry into `POSApp` that handles shift initialization (Resume/Continue/Fresh).
 
-- Track orders and compute totals in real time
-- Record inventory (starting, delivery, waste) and auto-calculate sold quantities
-- Generate and export daily shift reports in multiple formats
-- Run fully offline after installation
-
----
-
-## Installation & Local Development
-
-### Prerequisites
-- Node.js v18+ (with npm)
-- Firebase CLI: `npm install -g firebase-tools`
-
-### Setup
-```bash
-git clone https://github.com/rKennStudio/angels-pos.git
-cd angels-pos
-npm install
-npm run dev -- --host
-```
-
-Or double-click **`run-local.cmd`** in the project root.
-
-- Local: `http://localhost:5173`
-- Network: `http://<your-ip>:5173`
+### Data Lifecycle
+- **Shift Active State**: Stored in a single `localStorage` key: `pos_active_shift_${shopId}`. This contains `orders`, `inventory`, and `activeOrderId`.
+- **Shift End Stage**: Data is compiled into a `shift_report` and pushed to Firestore. Local data is purged only upon successful cloud write.
+- **Persistence Strategy**: "Local-First". The app functions offline during the shift; Firestore is used for initialization (Historical snapshots) and finalization (Report storage).
 
 ---
 
-## PWA Installation
+## 3. Multi-Tenant Model & Roles
 
-### Android (Chrome)
-1. Open https://angels-pos.web.app in Chrome
-2. Tap **⋮ menu → Add to Home Screen**
-3. Or go to **Settings → Install App** inside the app
+### Firestore Schema
+- **/users/{uid}**: Contains user profile and a `memberships` map: `{ shopId: 'owner' | 'staff' }`.
+- **/shops/{shopId}**: Contains shop metadata (`name`, `joinCode`, `ownerId`).
+- **/shops/{shopId}/shift_reports/{reportId}**: Atomic snapshots of completed shifts.
 
-### iOS (Safari)
-1. Open the site in Safari
-2. Tap **Share → Add to Home Screen**
-
-### Desktop (Chrome/Edge)
-1. Click the install icon in the address bar
-2. Or use **Settings → Install App** inside the app
-
-> Once installed, the browser chrome is hidden. The app runs fullscreen.
+### Authorization
+- **Owner**: Can access all settings, create/join other shops, and is identified by the `owner` role string in their membership.
+- **Staff**: Regular users who joined via a 6-digit `joinCode`.
 
 ---
 
-## Main Interface
+## 4. The "Manual Count Engine" (Inventory Logic)
 
-### Left Panel — Order List
-- All orders created during the shift
-- Each card shows **Order #**, **Total (₱)**, and **time**
-- Active order is highlighted with a yellow border
-- Tap any card to switch to it
-- **"LATEST ORDER ↓"** button appears when scrolled up
+The core logic resides in `src/hooks/useReportMath.js`. It reconciles theoretical sales with physical reality.
 
-### Right Panel — Menu Items
-- Items grouped by: **Orders**, **Extras**, **Drinks**
-- **Tap** to add to active order
-- **Long-press** to instantly remove that item entirely from the active order
+### Theoretical Calculations
+- ** theoreticalEnding** = `Starting + Deliver - Waste - NormalSold`
+- **NormalSold**: Calculated by exploding every order's items into their ingredients based on the `recipe` map.
 
-### Top Bar
+### Reconciled Calculations (Physical Overrides)
+If a user enters a value in the **Ending** column:
+1.  **Variance** = `PhysicalEnding - TheoreticalEnding`
+2.  **Reconciled Sold** = `NormalSold - Variance`
+3.  **Total Sales** = `Reconciled Sold * Price`
 
-| Element | Action |
-|---|---|
-| ANGEL'S POS logo | Opens developer contact info |
-| Revenue card | Total revenue across all orders this shift |
-| Time card | Live clock (12h or 24h) |
-| ⚙ Settings | Opens Settings panel |
+*Note: This effectively automates "Shortage/Overage" accounting. If 5 patties are missing, the system treats them as "Sold" (Lost Revenue) to keep the stock numbers accurate.*
 
 ---
 
-## Order Management
+## 5. Main Interface Components
 
-### Adding Items
-Tap any item button to add 1 unit to the active order. Tapping again increments quantity.
+### Order Management (Left Panel)
+- Uses a "Current Active Order" pattern.
+- Orders are stored in an array; adding/removing items updates the `total` and `timestamp` fields.
 
-### Removing Items
-- **Toggle +/−** at the top of the right panel, then tap items to decrement
-- **Long-press** any item button to wipe it from the order instantly
+### Menu Grid (Right Panel)
+- Supports categories (Orders, Extras, Drinks).
+- **Add/Remove Toggle**: Global state changes the behavior of item buttons.
+- **Custom Value**: Handles variable-price entries (Tips, Misc).
 
-### Custom Values
-Tap **Custom Value** in the Extras row. Enter any amount (tips, misc charges). Works in both add and remove mode.
-
-### New Order
-Tap **NEW ORDER** to start fresh for the next customer. Previous orders stay in the list.
-
-### Reviewing Past Orders
-Tap any order card on the left to make it active. Add or remove items freely.
+### Report Modal (Spreadsheet)
+- Custom-built spreadsheet using CSS Grid.
+- Supports keyboard navigation (`Tab` / `Enter`) and bulk paste from Google Sheets/Excel.
 
 ---
 
-## Report Sheet
+## 6. Technical Setup & Deployment
 
-Open via the **📄 REPORT** button.
-
-### Columns
-
-| Column | Description |
-|---|---|
-| Item | Ingredient name (sticky column) |
-| Starting | Opening stock (Editable) |
-| Deliver | Stock received during shift (Editable) |
-| Waste | Discarded units (Editable) |
-| Ending | Physical Count Override (Editable). If empty, shows Theoretical Ending. |
-| Sold | Reconciled count: `Normal Sold + (Theoretical Ending - Final Ending)` |
-| Price | Unit cost |
-| Sales | Sold × Price (Reconciled) |
-
-> **Manual Count Mode:** Entering a value in the **Ending** column activates "Manual Count Mode". The app will solve the inventory equation backward to respect your physical count: `Final Sold = Start + Deliver - Waste - Physical Ending`.
-
-### Keyboard Navigation
-- `Tab` / `Enter` moves to the next **row** (same column), not sideways. Supported for Starting, Deliver, Waste, and Ending columns.
-
-### Data Actions (Header)
-- **📋 PASTE** — Bypasses browser clipboard limitations to import Google Sheets data.
-- **📥 IMPORT** — Opens a themed dialog to restore a `.json` backup.
-- **📤 EXPORT** — Opens a themed selection dialog (Excel, PDF, CSV, JSON).
-
----
-
-## Manual Count Engine
-
-Formerly known as "Reconciliation", this engine ensures the POS matches the physical reality of your inventory.
-
-### How it Works
-1. **Theoretical Sales**: The system tracks items sold through receipt transactions (`Normal Sold`).
-2. **Physical Overrides**: If you perform a manual count and enter the count in the **Ending** column, the system calculates the **Variance**.
-3. **Automated Adjustment**: 
-   - If stock is missing (shortage), the system increases the `Sold` count and adds a virtual adjustment charge.
-   - If stock is excess, the system decreases the `Sold` count and adds a virtual credit.
-
-### Manual Count Dashboard (Right Panel)
-When any "Ending" override is active:
-- **Menu Locking**: The main item buttons are locked and grayscale to prevent new orders during counting.
-- **Summary View**: The right panel transforms into a scrollable list of all variances (missing vs. excess items).
-- **Net Impact**: Shows the total financial adjustment applied to the shift revenue.
-- **Actions**: Provides quick access to **Open Report Sheet** or **Clear Manual Counts** to unlock the menu.
-
----
-
-## System Settings
-
-### General Config Tab
-
-| Setting | Description |
-|---|---|
-| Clock Format | 12-Hour or 24-Hour |
-| Theme | Light or Dark mode |
-| UI Scale | Zoom slider 60%–150% |
-| Install App | Appears when app is installable; shows green checkmark if already installed |
-
-### Item Prices (Overrides) Tab
-- Override default prices for menu items and spreadsheet ingredients
-- Changes persist across sessions
-
-### Recipe Ingredients Tab
-- Customize ingredient quantities consumed per menu item
-- Affects Sold calculations in the report
-
----
-
-## Data Management
-
-### Clear Shift Data
-Tap **START NEW SHIFT (CLEAR DATA)** in the report footer.
-
-- **BACKUP JSON & CLEAR** — exports a JSON file then wipes all data
-- **Clear Without Backup** — wipes immediately
-
-**Cleared:** orders, inventory inputs, active order  
-**Preserved:** settings, price overrides, recipe overrides
-
----
-
-## Export & Import
-
-### Formats
-- **Excel (.xlsx)** — Full report sheet with all reconciled totals.
-- **PDF (.pdf)** — Clean, printable document for physical records.
-- **CSV (.csv)** — Lightweight data for spreadsheet integration.
-- **JSON (.json)** — Full system state backup (Orders + Inventory + Overrides).
-
-### Themed Dialogs
-Both Import and Export now use custom-designed popup dialogs that match the Angel's POS premium aesthetic, replacing standard browser menus with a more intuitive, touch-friendly interface.
-
----
-
-## Deployment
-
-```bash
-npm run build
-firebase deploy --only hosting
-```
-
-Live at: **https://angels-pos.web.app**
-
-- Firebase Project ID: `angels-pos`
-- Config files: `.firebaserc`, `firebase.json`
-
----
-
-## Project Structure
-
-```
-angels-pos/
+### Project Structure
+```text
 ├── public/
-│   ├── manifest.json      # PWA config
-│   ├── favicon.svg        # App icon
-│   └── icons.svg
+│   ├── manifest.json      # PWA config (standalone mode)
+│   └── icons.svg          # High-res app icons
 ├── src/
-│   ├── App.jsx            # All app logic and UI
-│   ├── App.css
-│   ├── index.css          # Tailwind base
-│   └── main.jsx
-├── firebase.json
-├── .firebaserc
-├── vite.config.js
-├── tailwind.config.js
-├── run-local.cmd          # Run local dev + network server
-└── package.json
+│   ├── templates/
+│   │   └── angelsBurger.js # JSON-based shop configuration (Menu, Recipes, Pricing)
+│   ├── hooks/
+│   │   └── useReportMath.js # Reconciled inventory calculation logic
+│   ├── App.jsx            # AuthWrapper & POSApp (Main Logic)
+│   ├── firebase.js        # Firebase v10 initialization
+│   ├── index.css          # Tailwind base & global styles
+│   └── main.jsx           # React Root
+├── .firebaserc            # Maps local environment to 'angels-pos' Project ID
+└── firebase.json          # Hosting & Firestore security rules
 ```
+
+### Deployment
+1. Build: `npm run build`
+2. Deploy: `firebase deploy --only hosting`
 
 ---
 
-## Data Architecture
+## 7. Operational Checklist for LLMs
 
-All data lives in **localStorage**:
-
-| Key | Contents |
-|---|---|
-| `pos_orders` | Array of orders with items and totals |
-| `pos_activeOrderId` | Currently selected order ID |
-| `pos_inventory` | Ingredient rows (starting/deliver/waste) |
-| `pos_config` | Theme, clock, scale, custom prices, custom recipes |
-
-### Order Schema
-```json
-{
-  "id": 1,
-  "items": [
-    { "id": "beef_burger", "name": "Beef Burger", "price": 40, "qty": 2, "dynamicPrice": 40 }
-  ],
-  "total": 80,
-  "timestamp": 1713340000000
-}
-```
-
-### Config Schema
-```json
-{
-  "timeFormat": "12h",
-  "theme": "dark",
-  "scale": 1,
-  "customPrices": {
-    "menu": { "beef_burger": 45 },
-    "ingredients": { "Patty": 16 }
-  },
-  "customRecipes": {
-    "beef_burger": { "Patty": 2, "Buns": 2 }
-  }
-}
-```
+When modifying this project, adhere to these constraints:
+1.  **State Atomic**: Always use `setOrders(prev => ...)` to avoid race conditions.
+2.  **Tailwind Hierarchy**: Most components use specific Tailwind classes for the "Premium Aesthetic" (e.g., `rounded-2xl`, `font-black`, `backdrop-blur`). Do not simplify these.
+3.  **Local-First Verification**: Ensure any change to the shift state is tracked by the `localStorage` auto-save effect in `POSApp`.
+4.  **Math Integrity**: Changes to inventory logic must be verified against `useReportMath.js` to ensure the manual count engine remains balanced.
 
 ---
-
-## Troubleshooting
-
-**Browser bar still shows after install**  
-Uninstall and reinstall the PWA. The manifest uses `"display": "standalone"`.
-
-**Paste from Sheets not working**  
-Use the PASTE button. If blocked, use the Manual Paste modal — long-press the textarea and select "Paste".
-
-**Dark mode text still looks black**  
-Hard-refresh: `Ctrl+Shift+R`. For PWA, clear app storage from device settings.
-
-**App shows stale data after deploy**  
-Hold Shift + refresh. On Android, clear app storage from Settings → Apps → Angel's POS → Clear Data.
-
-**Export shows broken file**  
-Use JSON or CSV as fallback. JSON is the most reliable format.
-
----
-
-*Documentation: April 2026 | Developer: Kenn Egway — rKenn.Studio@gmail.com*
+*Last Updated: April 2026 | Maintainer: Kenn Egway*

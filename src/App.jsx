@@ -311,8 +311,10 @@ const OrderFeed = ({
 const MenuGrid = ({
   storeConfig, spreadsheetData, isAddMode, setIsAddMode,
   setShowReport, createNewOrder, handleItemClick, handleItemLongPress,
-  handleRemoveManualCount, orders, activeOrderId,
+  handleRemoveManualCount, orders, activeOrderId, config,
 }) => {
+  const GRID_COLS_MAP = { 2: 'grid-cols-2', 3: 'grid-cols-3', 4: 'grid-cols-4', 5: 'grid-cols-5', 6: 'grid-cols-6' };
+  const gridClass = GRID_COLS_MAP[config?.gridCols || 3] || 'grid-cols-3';
   const ItemButton = ({ item }) => {
     const isLocked = !!spreadsheetData.adjustmentOrder;
     const activeOrder = orders.find(o => o.id === activeOrderId) || { items: [] };
@@ -422,7 +424,7 @@ const MenuGrid = ({
                   <div className={`w-4 shrink-0 ${colors.bg} flex items-center justify-center rounded-l-sm`}>
                     <span className={`text-[8px] font-black ${colors.text} uppercase tracking-widest whitespace-nowrap`} style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}>{category.name}</span>
                   </div>
-                  <div className="flex-1 grid grid-cols-3 gap-0.5 ml-0.5">
+                  <div className={`flex-1 grid ${gridClass} gap-0.5 ml-0.5`}>
                     {storeConfig.menuItems.filter(item => item.categoryId === category.id).map(item => (
                       <ItemButton key={item.id} item={item} />
                     ))}
@@ -440,65 +442,242 @@ const MenuGrid = ({
 // =============================================================================
 // PANEL: ReportModal
 // =============================================================================
-const ReportModal = ({
+function ReportModal({
   storeConfig, inventory, handleInventoryInput, spreadsheetData,
   setShowReport, handleManualPaste, setShowImportModal, setShowExportModal,
   setLastActiveCell, handleTableKeyDown, handleTablePaste, handleEndShift,
-}) => (
-  <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-2 sm:p-4">
-    <div className="bg-white dark:bg-gray-900 rounded-xl shadow-2xl w-full max-w-5xl flex flex-col max-h-[95vh] overflow-hidden animate-in fade-in zoom-in duration-200 border border-gray-200 dark:border-gray-800">
-      <div className="bg-gray-900 text-white p-3 sm:p-4 flex justify-between items-center shadow-md z-10">
-        <div>
-          <h2 className="text-sm sm:text-lg font-black flex items-center gap-2"><FileText className="text-yellow-400" size={16} /> Inventory Sheet</h2>
-          <p className="text-gray-400 text-[10px] sm:text-xs mt-0.5">End calculated: Starting + Deliver - Waste - Sold</p>
+  closeKeypadRef, onKeypadChange,
+}) {
+  const [mathInput, setMathInput] = React.useState('');
+  const [activeCell, setActiveCell] = React.useState(null);
+  // Persists the raw expression string per cell: { rowName: { field: exprString } }
+  const [exprMap, setExprMap] = React.useState({});
+
+  // Keep parent informed of keypad open/close state (for back-press handling)
+  React.useEffect(() => { onKeypadChange?.(!!activeCell); }, [activeCell]);
+  // Expose a close-keypad callback to the parent via ref
+  React.useEffect(() => {
+    if (closeKeypadRef) closeKeypadRef.current = () => setActiveCell(null);
+    return () => { if (closeKeypadRef) closeKeypadRef.current = null; };
+  }, [closeKeypadRef]);
+
+  const evaluateMath = (str) => {
+    if (!str && str !== 0) return '';
+    try {
+      const sanitized = String(str).replace(/[^\d+\-*/().\s]/g, '');
+      if (!sanitized) return 0;
+      // eslint-disable-next-line no-new-func
+      const result = new Function(`'use strict'; return (${sanitized})`)();
+      return Number.isFinite(result) ? Math.floor(result) : 0;
+    } catch { return 0; }
+  };
+
+  // Commit: evaluate expression → save number to inventory, save raw expr string to exprMap
+  const commitCell = (rowName, field, expr) => {
+    const finalVal = evaluateMath(expr);
+    handleInventoryInput(rowName, field, finalVal);
+    setExprMap(prev => ({
+      ...prev,
+      [rowName]: { ...(prev[rowName] || {}), [field]: expr },
+    }));
+  };
+
+  const handleCellFocus = (rowName, field, rawVal, rowIdx) => {
+    setLastActiveCell({ rowIdx, field });
+    setActiveCell({ rowName, field, rowIdx });
+    // Restore saved expression, else fall back to the stored number
+    const savedExpr = exprMap[rowName]?.[field];
+    setMathInput(savedExpr !== undefined ? savedExpr : (rawVal !== undefined && rawVal !== '' ? String(rawVal) : ''));
+  };
+
+  const handleCellBlur = () => {
+    if (!activeCell) return;
+    commitCell(activeCell.rowName, activeCell.field, mathInput);
+    setActiveCell(null);
+  };
+
+  const onKeypadPress = (key) => {
+    if (!activeCell) return;
+    if (key === 'C') { setMathInput(''); return; }
+    if (key === '⌫') { setMathInput(prev => prev.slice(0, -1)); return; }
+    if (key === '↵') {
+      // Commit current cell then move focus one row DOWN, same column field
+      commitCell(activeCell.rowName, activeCell.field, mathInput);
+      const nextRowIdx = activeCell.rowIdx + 1;
+      const nextInput = document.querySelector(`input[data-row="${nextRowIdx}"][data-field="${activeCell.field}"]`);
+      if (nextInput) {
+        nextInput.focus();
+      } else {
+        setActiveCell(null);
+      }
+      return;
+    }
+    setMathInput(prev => prev + key);
+  };
+
+  const isCellActive = (rowIdx, field) => activeCell?.rowIdx === rowIdx && activeCell?.field === field;
+
+  // Inactive cells: show stored expression string if one exists, otherwise the numeric value
+  const cellValue = (rowName, field, rawVal, rowIdx) => {
+    if (isCellActive(rowIdx, field)) return mathInput;
+    const savedExpr = exprMap[rowName]?.[field];
+    if (savedExpr !== undefined && savedExpr !== '') return savedExpr;
+    return rawVal ?? '';
+  };
+
+  // Proper 4-column calculator layout:
+  // Row 1: (   )   C   ⌫
+  // Row 2: 7   8   9   /
+  // Row 3: 4   5   6   *
+  // Row 4: 1   2   3   -
+  // Row 5: 0   .   +   ↵
+  const KEYPAD_KEYS = [
+    '(', ')', 'C', '⌫',
+    '7', '8', '9', '/',
+    '4', '5', '6', '*',
+    '1', '2', '3', '-',
+    '0', '.', '+', '↵',
+  ];
+
+  return (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-2 sm:p-4">
+      <div className="bg-white dark:bg-gray-900 rounded-xl shadow-2xl w-full max-w-5xl flex flex-col max-h-[95vh] overflow-hidden animate-in fade-in zoom-in duration-200 border border-gray-200 dark:border-gray-800">
+        <div className="bg-gray-900 text-white p-3 sm:p-4 flex justify-between items-center shadow-md z-10">
+          <div>
+            <h2 className="text-sm sm:text-lg font-black flex items-center gap-2"><FileText className="text-yellow-400" size={16} /> Inventory Sheet</h2>
+            <p className="text-gray-400 text-[10px] sm:text-xs mt-0.5">End calculated: Starting + Deliver - Waste - Sold</p>
+          </div>
+          <div className="flex gap-2">
+            <button onClick={handleManualPaste} className="p-2 hover:bg-gray-800 rounded-lg transition-all flex items-center gap-1.5 text-xs text-blue-400 border border-blue-400/30"><ClipboardPaste size={18} /><span className="hidden sm:inline">Paste</span></button>
+            <button onClick={() => setShowImportModal(true)} className="p-2 hover:bg-gray-800 rounded-lg transition-all flex items-center gap-1.5 text-xs text-green-400 border border-green-400/30"><Upload size={18} /><span className="hidden sm:inline">Import</span></button>
+            <button onClick={() => setShowExportModal(true)} className="p-2 bg-yellow-400 text-yellow-900 rounded-lg transition-all flex items-center gap-1.5 text-xs font-black shadow-sm active:scale-95 border-b-2 border-yellow-600"><Download size={18} /><span className="hidden sm:inline">Export</span></button>
+            <button onClick={() => setShowReport(false)} className="p-1.5 hover:bg-gray-800 rounded-full transition-colors"><X size={20} /></button>
+          </div>
         </div>
-        <div className="flex gap-2">
-          <button onClick={handleManualPaste} className="p-2 hover:bg-gray-800 rounded-lg transition-all flex items-center gap-1.5 text-xs text-blue-400 border border-blue-400/30"><ClipboardPaste size={18} /><span className="hidden sm:inline">Paste</span></button>
-          <button onClick={() => setShowImportModal(true)} className="p-2 hover:bg-gray-800 rounded-lg transition-all flex items-center gap-1.5 text-xs text-green-400 border border-green-400/30"><Upload size={18} /><span className="hidden sm:inline">Import</span></button>
-          <button onClick={() => setShowExportModal(true)} className="p-2 bg-yellow-400 text-yellow-900 rounded-lg transition-all flex items-center gap-1.5 text-xs font-black shadow-sm active:scale-95 border-b-2 border-yellow-600"><Download size={18} /><span className="hidden sm:inline">Export</span></button>
-          <button onClick={() => setShowReport(false)} className="p-1.5 hover:bg-gray-800 rounded-full transition-colors"><X size={20} /></button>
-        </div>
-      </div>
-      <div className="p-0 overflow-y-auto overflow-x-auto flex-1 bg-gray-50">
-        <table className="w-full text-left border-collapse min-w-[600px]">
-          <thead className="sticky top-0 bg-gray-200 dark:bg-gray-800 border-b-2 border-gray-300 dark:border-gray-700 z-10">
-            <tr className="text-gray-700 dark:text-gray-300 text-[10px] sm:text-xs uppercase tracking-wider">
-              <th className="p-2 border-r border-gray-300 font-black sticky left-0 z-20 bg-gray-200 dark:bg-gray-800 shadow-[1px_0_0_#9CA3AF] dark:shadow-[1px_0_0_#374151]">Item</th>
-              <th className="p-2 border-r border-gray-300 text-center font-bold bg-blue-50/50">Starting</th>
-              <th className="p-2 border-r border-gray-300 text-center font-bold bg-blue-50/50">Deliver</th>
-              <th className="p-2 border-r border-gray-300 text-center font-bold bg-red-50/50">Waste</th>
-              <th className="p-2 border-r border-gray-300 text-center font-black text-green-800 bg-green-50">Ending</th>
-              <th className="p-2 border-r border-gray-300 text-center font-bold text-blue-800 bg-gray-100">Sold</th>
-              <th className="p-2 border-r border-gray-300 text-right font-bold">Prices</th>
-              <th className="p-2 text-right font-black">Sales</th>
-            </tr>
-          </thead>
-          <tbody className="text-[11px] sm:text-sm divide-y divide-gray-200 dark:divide-gray-800 bg-white dark:bg-gray-900">
-            {spreadsheetData.rows.map((row, idx) => (
-              <tr key={idx} className="hover:bg-gray-50 transition-colors">
-                <td className="p-2 border-r border-gray-200 dark:border-gray-800 font-bold text-gray-800 dark:text-gray-200 whitespace-nowrap sticky left-0 z-10 bg-white dark:bg-gray-900 shadow-[1px_0_0_#E5E7EB] dark:shadow-[1px_0_0_#1F2937]">{row.name}</td>
-                <td className="p-0 border-r border-gray-200 bg-blue-50/20 dark:bg-blue-50/5"><input type="number" data-row={idx} data-field="starting" onKeyDown={(e) => handleTableKeyDown(e, idx, 'starting')} onPaste={(e) => handleTablePaste(e, idx, 'starting')} onFocus={() => setLastActiveCell({ rowIdx: idx, field: 'starting' })} value={inventory[row.name]?.starting || ''} onChange={(e) => handleInventoryInput(row.name, 'starting', e.target.value)} className="w-full h-full p-2 text-center bg-transparent dark:text-white focus:bg-white dark:focus:bg-gray-800 focus:outline-none focus:ring-1 focus:ring-blue-500 [&::-webkit-inner-spin-button]:appearance-none" placeholder="0" /></td>
-                <td className="p-0 border-r border-gray-200 bg-blue-50/20 dark:bg-blue-50/5"><input type="number" data-row={idx} data-field="deliver" onKeyDown={(e) => handleTableKeyDown(e, idx, 'deliver')} onPaste={(e) => handleTablePaste(e, idx, 'deliver')} onFocus={() => setLastActiveCell({ rowIdx: idx, field: 'deliver' })} value={inventory[row.name]?.deliver || ''} onChange={(e) => handleInventoryInput(row.name, 'deliver', e.target.value)} className="w-full h-full p-2 text-center bg-transparent dark:text-white focus:bg-white dark:focus:bg-gray-800 focus:outline-none focus:ring-1 focus:ring-blue-500 [&::-webkit-inner-spin-button]:appearance-none" placeholder="0" /></td>
-                <td className="p-0 border-r border-gray-200 bg-red-50/20 dark:bg-red-50/5"><input type="number" data-row={idx} data-field="waste" onKeyDown={(e) => handleTableKeyDown(e, idx, 'waste')} onPaste={(e) => handleTablePaste(e, idx, 'waste')} onFocus={() => setLastActiveCell({ rowIdx: idx, field: 'waste' })} value={inventory[row.name]?.waste || ''} onChange={(e) => handleInventoryInput(row.name, 'waste', e.target.value)} className="w-full h-full p-2 text-center bg-transparent focus:bg-white dark:focus:bg-gray-800 focus:outline-none focus:ring-1 focus:ring-red-500 text-red-600 dark:text-red-400 [&::-webkit-inner-spin-button]:appearance-none" placeholder="0" /></td>
-                <td className="p-0 border-r border-gray-200 bg-green-50/20 dark:bg-green-50/5"><input type="number" data-row={idx} data-field="endingOverride" onKeyDown={(e) => handleTableKeyDown(e, idx, 'endingOverride')} onFocus={() => setLastActiveCell({ rowIdx: idx, field: 'endingOverride' })} value={inventory[row.name]?.endingOverride ?? ''} onChange={(e) => handleInventoryInput(row.name, 'endingOverride', e.target.value)} className={`w-full h-full p-2 text-center bg-transparent focus:bg-white dark:focus:bg-gray-800 focus:outline-none focus:ring-1 focus:ring-green-500 font-extrabold [&::-webkit-inner-spin-button]:appearance-none transition-colors ${row.hasOverride ? 'text-purple-600 dark:text-purple-400' : 'text-green-700 dark:text-green-600'}`} placeholder={row.theoreticalEnding} /></td>
-                <td className={`p-2 border-r border-gray-200 text-center font-bold bg-gray-50 dark:bg-gray-800/40 transition-colors ${row.missingQty !== 0 ? 'text-purple-600 dark:text-purple-400' : 'text-blue-600 dark:text-blue-400'}`}>{row.finalSold}</td>
-                <td className="p-2 border-r border-gray-200 dark:border-gray-700 text-right text-gray-500 dark:text-gray-400">{row.price}</td>
-                <td className="p-2 text-right font-bold text-gray-800 dark:text-gray-200 bg-gray-50 dark:bg-gray-800">₱{row.sales}</td>
+        <div className="p-0 overflow-y-auto overflow-x-auto flex-1 bg-gray-50">
+          <table className="w-full text-left border-collapse min-w-[600px]">
+            <thead className="sticky top-0 bg-gray-200 dark:bg-gray-800 border-b-2 border-gray-300 dark:border-gray-700 z-10">
+              <tr className="text-gray-700 dark:text-gray-300 text-[10px] sm:text-xs uppercase tracking-wider">
+                <th className="p-2 border-r border-gray-300 font-black sticky left-0 z-20 bg-gray-200 dark:bg-gray-800 shadow-[1px_0_0_#9CA3AF] dark:shadow-[1px_0_0_#374151]">Item</th>
+                <th className="p-2 border-r border-gray-300 text-center font-bold bg-blue-50/50">Starting</th>
+                <th className="p-2 border-r border-gray-300 text-center font-bold bg-blue-50/50">Deliver</th>
+                <th className="p-2 border-r border-gray-300 text-center font-bold bg-red-50/50">Waste</th>
+                <th className="p-2 border-r border-gray-300 text-center font-black text-green-800 bg-green-50">Ending</th>
+                <th className="p-2 border-r border-gray-300 text-center font-bold text-blue-800 bg-gray-100">Sold</th>
+                <th className="p-2 border-r border-gray-300 text-right font-bold">Prices</th>
+                <th className="p-2 text-right font-black">Sales</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      <div className="p-3 sm:p-4 bg-gray-100 dark:bg-gray-900 border-t dark:border-gray-700 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-inner">
-        <div className="bg-white dark:bg-gray-800 px-4 py-2 rounded-lg border dark:border-gray-700 shadow-sm">
-          <p className="text-gray-500 dark:text-gray-400 font-bold uppercase text-[10px] sm:text-xs mb-0.5">Calculated Total Sales</p>
-          <p className="text-xl sm:text-3xl font-black text-green-600">₱{spreadsheetData.grandTotalSales}</p>
+            </thead>
+            <tbody className="text-[11px] sm:text-sm divide-y divide-gray-200 dark:divide-gray-800 bg-white dark:bg-gray-900">
+              {spreadsheetData.rows.map((row, idx) => (
+                <tr key={idx} className="hover:bg-gray-50 transition-colors">
+                  <td className="p-2 border-r border-gray-200 dark:border-gray-800 font-bold text-gray-800 dark:text-gray-200 whitespace-nowrap sticky left-0 z-10 bg-white dark:bg-gray-900 shadow-[1px_0_0_#E5E7EB] dark:shadow-[1px_0_0_#1F2937]">{row.name}</td>
+                  <td className={`p-0 border-r border-gray-200 bg-blue-50/20 dark:bg-blue-50/5 ${isCellActive(idx, 'starting') ? 'ring-2 ring-inset ring-blue-500' : ''}`}>
+                    <input type="text" inputMode="none" readOnly data-row={idx} data-field="starting"
+                      onKeyDown={(e) => handleTableKeyDown(e, idx, 'starting')}
+                      onFocus={() => handleCellFocus(row.name, 'starting', inventory[row.name]?.starting, idx)}
+                      onBlur={handleCellBlur}
+                      value={cellValue(row.name, 'starting', inventory[row.name]?.starting, idx)}
+                      onChange={() => {}}
+                      className="w-full h-full p-2 text-center bg-transparent dark:text-white focus:bg-white dark:focus:bg-gray-800 focus:outline-none cursor-pointer caret-transparent"
+                      placeholder="0" />
+                  </td>
+                  <td className={`p-0 border-r border-gray-200 bg-blue-50/20 dark:bg-blue-50/5 ${isCellActive(idx, 'deliver') ? 'ring-2 ring-inset ring-blue-500' : ''}`}>
+                    <input type="text" inputMode="none" readOnly data-row={idx} data-field="deliver"
+                      onKeyDown={(e) => handleTableKeyDown(e, idx, 'deliver')}
+                      onFocus={() => handleCellFocus(row.name, 'deliver', inventory[row.name]?.deliver, idx)}
+                      onBlur={handleCellBlur}
+                      value={cellValue(row.name, 'deliver', inventory[row.name]?.deliver, idx)}
+                      onChange={() => {}}
+                      className="w-full h-full p-2 text-center bg-transparent dark:text-white focus:bg-white dark:focus:bg-gray-800 focus:outline-none cursor-pointer caret-transparent"
+                      placeholder="0" />
+                  </td>
+                  <td className={`p-0 border-r border-gray-200 bg-red-50/20 dark:bg-red-50/5 ${isCellActive(idx, 'waste') ? 'ring-2 ring-inset ring-red-500' : ''}`}>
+                    <input type="text" inputMode="none" readOnly data-row={idx} data-field="waste"
+                      onKeyDown={(e) => handleTableKeyDown(e, idx, 'waste')}
+                      onFocus={() => handleCellFocus(row.name, 'waste', inventory[row.name]?.waste, idx)}
+                      onBlur={handleCellBlur}
+                      value={cellValue(row.name, 'waste', inventory[row.name]?.waste, idx)}
+                      onChange={() => {}}
+                      className="w-full h-full p-2 text-center bg-transparent focus:bg-white dark:focus:bg-gray-800 focus:outline-none cursor-pointer caret-transparent text-red-600 dark:text-red-400"
+                      placeholder="0" />
+                  </td>
+                  <td className={`p-0 border-r border-gray-200 bg-green-50/20 dark:bg-green-50/5 ${isCellActive(idx, 'endingOverride') ? 'ring-2 ring-inset ring-green-500' : ''}`}>
+                    <input type="text" inputMode="none" readOnly data-row={idx} data-field="endingOverride"
+                      onKeyDown={(e) => handleTableKeyDown(e, idx, 'endingOverride')}
+                      onFocus={() => handleCellFocus(row.name, 'endingOverride', inventory[row.name]?.endingOverride, idx)}
+                      onBlur={handleCellBlur}
+                      value={cellValue(row.name, 'endingOverride', inventory[row.name]?.endingOverride, idx)}
+                      onChange={() => {}}
+                      className={`w-full h-full p-2 text-center bg-transparent focus:bg-white dark:focus:bg-gray-800 focus:outline-none cursor-pointer caret-transparent font-extrabold transition-colors ${row.hasOverride ? 'text-purple-600 dark:text-purple-400' : 'text-green-700 dark:text-green-600'}`}
+                      placeholder={row.theoreticalEnding} />
+                  </td>
+                  <td className={`p-2 border-r border-gray-200 text-center font-bold bg-gray-50 dark:bg-gray-800/40 transition-colors ${row.missingQty !== 0 ? 'text-purple-600 dark:text-purple-400' : 'text-blue-600 dark:text-blue-400'}`}>{row.finalSold}</td>
+                  <td className="p-2 border-r border-gray-200 dark:border-gray-700 text-right text-gray-500 dark:text-gray-400">{row.price}</td>
+                  <td className="p-2 text-right font-bold text-gray-800 dark:text-gray-200 bg-gray-50 dark:bg-gray-800">₱{row.sales}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
-        <button onClick={handleEndShift} className="px-4 py-3 bg-red-600 hover:bg-red-700 text-white font-black rounded-xl shadow-lg transition-all active:scale-95 uppercase tracking-wider text-xs sm:text-sm border-b-4 border-red-800">End Shift &amp; Save Report</button>
+        <div className="p-3 sm:p-4 bg-gray-100 dark:bg-gray-900 border-t dark:border-gray-700 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-inner">
+          <div className="bg-white dark:bg-gray-800 px-4 py-2 rounded-lg border dark:border-gray-700 shadow-sm">
+            <p className="text-gray-500 dark:text-gray-400 font-bold uppercase text-[10px] sm:text-xs mb-0.5">Calculated Total Sales</p>
+            <p className="text-xl sm:text-3xl font-black text-green-600">₱{spreadsheetData.grandTotalSales}</p>
+          </div>
+          <button onClick={handleEndShift} className="px-4 py-3 bg-red-600 hover:bg-red-700 text-white font-black rounded-xl shadow-lg transition-all active:scale-95 uppercase tracking-wider text-xs sm:text-sm border-b-4 border-red-800">End Shift &amp; Save Report</button>
+        </div>
+
+        {/* ── Math Expression Display (shows when any cell is active) ── */}
+        {activeCell && (
+          <div className="bg-gray-900 px-4 py-2 flex items-center justify-between border-t-2 border-yellow-400/60 shrink-0">
+            <div className="flex flex-col">
+              <span className="text-[9px] text-yellow-400 font-black uppercase tracking-widest">Expression</span>
+              <span className="text-white font-mono text-lg font-black tracking-wider min-h-[28px]">{mathInput || <span className="text-gray-500">tap keys to enter...</span>}</span>
+            </div>
+            <div className="text-right">
+              <span className="text-[9px] text-gray-500 font-black uppercase tracking-widest">Preview</span>
+              <span className="block text-yellow-300 font-black text-lg">{mathInput ? evaluateMath(mathInput) : '—'}</span>
+            </div>
+          </div>
+        )}
+
+        {/* ── On-Screen Math Keypad ── */}
+        {activeCell && (
+          <div className="bg-gray-900 p-3 border-t border-gray-800 shrink-0 animate-in slide-in-from-bottom duration-200">
+            <div className="grid grid-cols-4 gap-2 max-w-md mx-auto">
+              {KEYPAD_KEYS.map((key) => (
+                <button
+                  key={key}
+                  onMouseDown={(e) => { e.preventDefault(); onKeypadPress(key); }}
+                  className={`
+                    py-4 rounded-xl font-black text-lg transition-all active:scale-90 select-none touch-manipulation
+                    ${ key === '↵'
+                        ? 'bg-green-500 hover:bg-green-400 text-white border-b-4 border-green-700'
+                      : key === 'C'
+                        ? 'bg-red-600 hover:bg-red-500 text-white border-b-4 border-red-800'
+                      : key === '⌫'
+                        ? 'bg-orange-500 hover:bg-orange-400 text-white border-b-4 border-orange-700'
+                      : ['+', '-', '*', '/'].includes(key)
+                        ? 'bg-blue-600 hover:bg-blue-500 text-white border-b-4 border-blue-800'
+                      : ['(', ')'].includes(key)
+                        ? 'bg-purple-600 hover:bg-purple-500 text-white border-b-4 border-purple-800'
+                      : key === '.'
+                        ? 'bg-gray-600 hover:bg-gray-500 text-white border-b-4 border-gray-800'
+                        : 'bg-gray-700 hover:bg-gray-600 text-gray-100 border-b-4 border-gray-900'
+                    }
+                  `}
+                >
+                  {key}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </div>
-  </div>
-);
+  );
+}
 
 // =============================================================================
 // POS APP  (the actual point-of-sale engine)
@@ -515,9 +694,11 @@ function POSApp({ shopId, userRole, memberships, user, onSwitchShop, onLogout })
   const [time, setTime] = useState(new Date());
   const [config, setConfig] = useState(() => {
     const saved = localStorage.getItem(`pos_config_${shopId}`);
-    return saved ? JSON.parse(saved) : {
-      timeFormat: '12h', theme: 'light', scale: 1,
-      customPrices: { menu: {}, ingredients: {} }, customRecipes: {}
+    const parsed = saved ? JSON.parse(saved) : {};
+    return {
+      timeFormat: '12h', theme: 'light', scale: 1, gridCols: 3,
+      customPrices: { menu: {}, ingredients: {} }, customRecipes: {},
+      ...parsed,
     };
   });
   const [storeConfig, setStoreConfig] = useState(() => {
@@ -556,6 +737,56 @@ function POSApp({ shopId, userRole, memberships, user, onSwitchShop, onLogout })
   // --- PWA INSTALL STATE ---
   const [deferredInstallPrompt, setDeferredInstallPrompt] = useState(null);
   const [isAppInstalled, setIsAppInstalled] = useState(false);
+
+  // --- BACK-PRESS (PWA) STATE ---
+  // Tracks whether the keypad inside ReportModal is open, without lifting full state
+  const [reportKeypadOpen, setReportKeypadOpen] = useState(false);
+  const closeKeypadRef = React.useRef(null);   // set by ReportModal
+  // Snapshot of all modal booleans for the stable popstate handler (avoids stale closures)
+  const modalStateRef = React.useRef({});
+  useEffect(() => {
+    modalStateRef.current = {
+      showReport, reportKeypadOpen, showSettings, showCodeModal,
+      showExportModal, showImportModal, pasteModal, devContactModal,
+      clearConfirmModal, customModal,
+    };
+  });
+  // Push an initial sentinel on mount so Android back never exits the PWA immediately
+  useEffect(() => {
+    history.pushState({ bizpos: true }, '');
+    const handler = () => {
+      const s = modalStateRef.current;
+      let closed = false;
+      // Priority order: most specific (keypad) → least specific (other modals)
+      if (s.reportKeypadOpen && s.showReport) {
+        closeKeypadRef.current?.();
+        closed = true;
+      } else if (s.showSettings) {
+        setShowSettings(false); closed = true;
+      } else if (s.showReport) {
+        setShowReport(false); closed = true;
+      } else if (s.showCodeModal) {
+        setShowCodeModal(false); closed = true;
+      } else if (s.showExportModal) {
+        setShowExportModal(false); closed = true;
+      } else if (s.showImportModal) {
+        setShowImportModal(false); closed = true;
+      } else if (s.pasteModal) {
+        setPasteModal(false); closed = true;
+      } else if (s.devContactModal) {
+        setDevContactModal(false); closed = true;
+      } else if (s.clearConfirmModal) {
+        setClearConfirmModal(false); closed = true;
+      } else if (s.customModal?.isOpen) {
+        setCustomModal({ isOpen: false, isRemoving: false }); closed = true;
+      }
+      // Re-push the sentinel so the NEXT back press is still intercepted
+      // (if anything remains open), or remains for the app's base nav state
+      if (closed) history.pushState({ bizpos: true }, '');
+    };
+    window.addEventListener('popstate', handler);
+    return () => window.removeEventListener('popstate', handler);
+  }, []); // mount-only — reads live state via modalStateRef
 
   // --- SHOP NAMES + CODE (for the Account modal membership list & header) ---
   const [shopNames, setShopNames] = useState({});
@@ -1086,6 +1317,7 @@ function POSApp({ shopId, userRole, memberships, user, onSwitchShop, onLogout })
         handleItemClick={handleItemClick} handleItemLongPress={handleItemLongPress}
         handleRemoveManualCount={handleRemoveManualCount}
         orders={orders} activeOrderId={activeOrderId}
+        config={config}
       />
 
       {/* ── Shop Code Enlarge Modal ── */}
@@ -1194,6 +1426,24 @@ function POSApp({ shopId, userRole, memberships, user, onSwitchShop, onLogout })
                       <p className="text-xs font-bold text-green-700 dark:text-green-400">App is installed on this device.</p>
                     </div>
                   )}
+
+                  <div>
+                    <h3 className="font-bold text-gray-800 dark:text-gray-200 mb-2 uppercase text-xs tracking-wider">Menu Grid Columns</h3>
+                    <p className="text-[10px] text-gray-400 dark:text-gray-500 font-bold mb-3">Controls how many item buttons appear per row in the menu.</p>
+                    <div className="flex gap-1.5">
+                      {[2, 3, 4, 5, 6].map(num => (
+                        <button key={num}
+                          onClick={() => setConfig(p => ({ ...p, gridCols: num }))}
+                          className={`flex-1 py-3 rounded-xl font-black text-sm border-2 transition-all flex items-center justify-center ${
+                            (config.gridCols || 3) === num
+                              ? 'border-blue-500 bg-blue-500 text-white shadow-md border-b-4 border-b-blue-700'
+                              : 'border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-500 dark:text-gray-400'
+                          }`}>
+                          {num}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                 </div>
               )}
 
@@ -1368,6 +1618,8 @@ function POSApp({ shopId, userRole, memberships, user, onSwitchShop, onLogout })
           setShowImportModal={setShowImportModal} setShowExportModal={setShowExportModal}
           setLastActiveCell={setLastActiveCell} handleTableKeyDown={handleTableKeyDown}
           handleTablePaste={handleTablePaste} handleEndShift={handleEndShift}
+          closeKeypadRef={closeKeypadRef}
+          onKeypadChange={setReportKeypadOpen}
         />
       )}
 

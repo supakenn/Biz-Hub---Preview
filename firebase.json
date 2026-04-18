@@ -1,5 +1,6 @@
 {
   "hosting": {
+    "site": "biz-pos",
     "public": "dist",
     "ignore": [
       "firebase.json",
