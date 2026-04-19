@@ -103,25 +103,90 @@ const OrderItemList = ({ items, isActive }) => {
   );
 };
 
-const OrderCard = ({ order, isActive, onSelect }) => (
-  <div
-    onClick={() => onSelect(order.id)}
-    className={`cursor-pointer border-2 rounded-xl p-2 transition-all flex flex-col ${
-      isActive
-        ? 'border-yellow-400 bg-white dark:bg-gray-800 shadow-md ring-2 ring-yellow-400/30 scale-[1.02]'
-        : 'border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-800 hover:border-yellow-300 dark:hover:border-yellow-600 opacity-80 hover:opacity-100'
-    }`}
-  >
-    <div className="flex justify-between items-center mb-2 border-b border-gray-100 dark:border-gray-700 pb-1">
-      <span className={`font-black text-sm ${isActive ? 'text-red-600' : 'text-gray-700 dark:text-gray-300'}`}>#{order.id}</span>
-      <span className={`font-black text-xl sm:text-2xl pt-1 ${isActive ? 'text-red-700' : 'text-gray-800 dark:text-gray-200'}`}>₱{order.total}</span>
-      <span className="text-[10px] text-gray-400 dark:text-gray-500 font-bold shrink-0">
-        {new Date(order.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-      </span>
+const OrderCard = ({ order, isActive, onSelect, onToggleStatus }) => {
+  const [offset, setOffset] = useState(0);
+  const [isDragging, setIsDragging] = useState(false);
+  const startX = React.useRef(0);
+
+  const handleStart = (clientX) => {
+    startX.current = clientX;
+    setIsDragging(true);
+  };
+
+  const handleMove = (clientX) => {
+    if (!isDragging) return;
+    const delta = clientX - startX.current;
+    // Cap the slide visual at 100px in either direction
+    setOffset(Math.max(-100, Math.min(100, delta)));
+  };
+
+  const handleEnd = () => {
+    if (!isDragging) return;
+    setIsDragging(false);
+    
+    // Trigger thresholds
+    if (offset > 60) onToggleStatus(order.id, 'isServed'); // Slide Right
+    else if (offset < -60) onToggleStatus(order.id, 'isPaid'); // Slide Left
+    
+    setOffset(0);
+  };
+
+  return (
+    <div className="relative overflow-hidden rounded-xl h-fit">
+      {/* Background Action Indicators */}
+      <div className="absolute inset-0 flex justify-between items-center text-white font-black text-xs px-4 rounded-xl">
+        <div className={`absolute inset-y-0 left-0 w-1/2 bg-blue-500 flex items-center px-4 transition-opacity ${offset > 0 ? 'opacity-100' : 'opacity-0'}`}>
+          {order.isServed ? 'UNMARK' : 'SERVED'}
+        </div>
+        <div className={`absolute inset-y-0 right-0 w-1/2 bg-green-500 flex items-center justify-end px-4 transition-opacity ${offset < 0 ? 'opacity-100' : 'opacity-0'}`}>
+          {order.isPaid ? 'UNMARK' : 'PAID'}
+        </div>
+      </div>
+
+      {/* Main Draggable Card */}
+      <div
+        onTouchStart={(e) => handleStart(e.touches[0].clientX)}
+        onTouchMove={(e) => handleMove(e.touches[0].clientX)}
+        onTouchEnd={handleEnd}
+        onMouseDown={(e) => handleStart(e.clientX)}
+        onMouseMove={(e) => handleMove(e.clientX)}
+        onMouseUp={handleEnd}
+        onMouseLeave={handleEnd}
+        onClick={(e) => {
+          // Prevent selecting the order if the user was just swiping
+          if (Math.abs(offset) < 10) onSelect(order.id);
+        }}
+        style={{
+          transform: `translateX(${offset}px)`,
+          transition: isDragging ? 'none' : 'transform 0.2s ease-out'
+        }}
+        className={`relative z-10 cursor-pointer border-2 rounded-xl p-2 transition-colors flex flex-col select-none touch-pan-y ${
+          isActive
+            ? 'border-yellow-400 bg-white dark:bg-gray-800 shadow-md ring-2 ring-yellow-400/30 scale-[1.02]'
+            : 'border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-800 hover:border-yellow-300 dark:hover:border-yellow-600 opacity-95 hover:opacity-100'
+        }`}
+      >
+        <div className="flex justify-between items-start mb-2 border-b border-gray-100 dark:border-gray-700 pb-1">
+          <div className="flex flex-col">
+            <span className={`font-black text-sm leading-none ${isActive ? 'text-red-600' : 'text-gray-700 dark:text-gray-300'}`}>#{order.id}</span>
+            {/* Status Badges */}
+            <div className="flex gap-1 mt-1">
+              {order.isPaid && <span className="bg-green-100 text-green-700 text-[8px] font-black px-1.5 py-0.5 rounded-sm">PAID</span>}
+              {order.isServed && <span className="bg-blue-100 text-blue-700 text-[8px] font-black px-1.5 py-0.5 rounded-sm">SERVED</span>}
+            </div>
+          </div>
+          <div className="flex flex-col items-end">
+            <span className={`font-black text-xl sm:text-2xl leading-none ${isActive ? 'text-red-700' : 'text-gray-800 dark:text-gray-200'}`}>₱{order.total}</span>
+            <span className="text-[9px] text-gray-400 dark:text-gray-500 font-bold mt-1">
+              {new Date(order.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+            </span>
+          </div>
+        </div>
+        <OrderItemList items={order.items} isActive={isActive} />
+      </div>
     </div>
-    <OrderItemList items={order.items} isActive={isActive} />
-  </div>
-);
+  );
+};
 
 const FallbackScreen = ({ onLoadTemplate }) => (
   <div className="h-[100dvh] flex flex-col items-center justify-center bg-gray-100 dark:bg-gray-950 font-sans p-8 text-center">
@@ -236,7 +301,12 @@ const OrderFeed = ({
   setShowSettings, setDevContactModal,
   ordersContainerRef, ordersEndRef, showScrollDown, handleOrdersScroll, scrollToLatest,
   onOpenAccountSettings, shopCode, onCodeClick,
-}) => (
+  onToggleOrderStatus
+}) => {
+  const orderCols = config?.orderGridCols || 2;
+  const gridClass = { 1: 'grid-cols-1', 2: 'grid-cols-2', 3: 'grid-cols-3', 4: 'grid-cols-4' }[orderCols] || 'grid-cols-2';
+
+  return (
   <div className="w-full sm:w-[40%] md:w-[35%] flex-1 min-h-[30dvh] sm:h-[100dvh] bg-[#F8F9FA] dark:bg-gray-900 border-b sm:border-b-0 sm:border-r border-gray-300 dark:border-gray-800 flex flex-col z-20 relative">
 
     <div className="bg-red-600 text-white px-2 py-2 shadow-sm flex justify-between items-center z-10 shrink-0 gap-1 tutorial-topbar">
@@ -255,12 +325,12 @@ const OrderFeed = ({
         </div>
         {shopCode && (
           <button
-            onClick={onCodeClick}
-            className="flex flex-col items-center bg-black/20 px-2 sm:px-3 py-1 rounded-lg shadow-inner min-w-[70px] sm:min-w-[80px] justify-center border border-yellow-400/40 hover:bg-black/40 hover:border-yellow-400/70 transition-all cursor-pointer active:scale-95"
-            title="Tap to enlarge code"
+            onClick={() => onCodeClick(true)}
+            className="flex flex-col items-center bg-black/20 px-2 sm:px-3 py-1 rounded-lg shadow-inner min-w-[70px] sm:min-w-[80px] justify-center border border-blue-400/40 hover:bg-black/40 hover:border-blue-400/70 transition-all cursor-pointer active:scale-95"
+            title="Open Shop Info & Logbook"
           >
-            <span className="text-[8px] font-bold text-red-200 uppercase tracking-widest mb-0.5">Shop Code</span>
-            <span className="text-sm sm:text-base font-black text-yellow-300 leading-none tracking-widest" style={{ fontFamily: "'Courier New', Courier, monospace", letterSpacing: '0.15em' }}>{shopCode}</span>
+            <span className="text-[8px] font-bold text-blue-200 uppercase tracking-widest mb-0.5">Shop Info</span>
+            <span className="text-sm sm:text-base font-black text-blue-300 leading-none tracking-widest uppercase">LOGBOOK</span>
           </button>
         )}
         <div className="flex flex-col items-center bg-black/20 px-2 sm:px-3 py-1 rounded-lg shadow-inner min-w-[70px] sm:min-w-[80px] justify-center">
@@ -286,12 +356,12 @@ const OrderFeed = ({
     <div
       ref={ordersContainerRef}
       onScroll={handleOrdersScroll}
-      className="flex-1 overflow-y-auto p-1 bg-gray-50 dark:bg-gray-950 content-start grid grid-cols-2 gap-1 relative scroll-smooth tutorial-orderlist shadow-inner"
+      className={`flex-1 overflow-y-auto p-1 bg-gray-50 dark:bg-gray-950 content-start grid ${gridClass} gap-1 relative scroll-smooth tutorial-orderlist shadow-inner`}
     >
       {orders.map(order => (
-        <OrderCard key={order.id} order={order} isActive={activeOrderId === order.id} onSelect={setActiveOrderId} />
+        <OrderCard key={order.id} order={order} isActive={activeOrderId === order.id} onSelect={setActiveOrderId} onToggleStatus={onToggleOrderStatus} />
       ))}
-      <div ref={ordersEndRef} className="col-span-2 h-2 shrink-0" />
+      <div ref={ordersEndRef} className="h-2 shrink-0" style={{ gridColumn: '1 / -1' }} />
     </div>
 
     {showScrollDown && (
@@ -303,7 +373,8 @@ const OrderFeed = ({
       </button>
     )}
   </div>
-);
+  );
+};
 
 // =============================================================================
 // PANEL: MenuGrid
@@ -447,6 +518,7 @@ function ReportModal({
   setShowReport, handleManualPaste, setShowImportModal, setShowExportModal,
   setLastActiveCell, handleTableKeyDown, handleTablePaste, handleEndShift,
   closeKeypadRef, onKeypadChange,
+  shiftRemarks, setShiftRemarks, // Added these
 }) {
   const [mathInput, setMathInput] = React.useState('');
   const [activeCell, setActiveCell] = React.useState(null);
@@ -628,6 +700,54 @@ function ReportModal({
           <button onClick={handleEndShift} className="px-4 py-3 bg-red-600 hover:bg-red-700 text-white font-black rounded-xl shadow-lg transition-all active:scale-95 uppercase tracking-wider text-xs sm:text-sm border-b-4 border-red-800">End Shift &amp; Save Report</button>
         </div>
 
+        {/* Shift Remarks Review */}
+        <div className="p-3 sm:p-4 bg-gray-50 dark:bg-gray-800/50 border-t dark:border-gray-700 shrink-0">
+          <label className="block text-xs font-bold text-gray-600 dark:text-gray-400 mb-2 uppercase tracking-wider">Review Current Shift Remarks</label>
+          
+          <div className="max-h-24 overflow-y-auto mb-3 space-y-1.5 custom-scrollbar border border-gray-200 dark:border-gray-700 rounded-xl p-2 bg-white dark:bg-gray-900">
+            {(!shiftRemarks || shiftRemarks.length === 0) ? (
+              <p className="text-xs text-gray-400 italic font-medium text-center py-2">No remarks logged during this shift.</p>
+            ) : (
+              shiftRemarks.map(remark => (
+                <div key={remark.id} className="text-xs bg-gray-50 dark:bg-gray-800 p-2 rounded-lg flex justify-between">
+                  <span className="text-gray-800 dark:text-gray-200 font-medium break-words leading-snug">{remark.text}</span>
+                  <span className="text-gray-400 text-[9px] shrink-0 ml-2 font-bold">{new Date(remark.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                </div>
+              ))
+            )}
+          </div>
+
+          <div className="flex gap-2">
+            <input 
+              type="text" 
+              id="finalRemarkInput"
+              placeholder="Add a final closing note before saving..." 
+              className="flex-1 text-sm p-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 focus:border-red-400 focus:ring-4 focus:ring-red-400/20 outline-none transition-all"
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && e.target.value.trim()) {
+                  const val = e.target.value.trim();
+                  setShiftRemarks(prev => [...(Array.isArray(prev) ? prev : []), { id: Date.now(), timestamp: Date.now(), text: val, author: 'Closing Note' }]);
+                  e.target.value = '';
+                }
+              }}
+            />
+            <button 
+              onClick={(e) => {
+                e.preventDefault();
+                const input = document.getElementById('finalRemarkInput');
+                if (input.value.trim()) {
+                  const val = input.value.trim();
+                  setShiftRemarks(prev => [...(Array.isArray(prev) ? prev : []), { id: Date.now(), timestamp: Date.now(), text: val, author: 'Closing Note' }]);
+                  input.value = '';
+                }
+              }}
+              className="bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200 font-black px-4 rounded-xl transition-colors text-xs"
+            >
+              ADD
+            </button>
+          </div>
+        </div>
+
         {/* ── Math Expression Display (shows when any cell is active) ── */}
         {activeCell && (
           <div className="bg-gray-900 px-4 py-2 flex items-center justify-between border-t-2 border-yellow-400/60 shrink-0">
@@ -694,11 +814,9 @@ function POSApp({ shopId, userRole, memberships, user, onSwitchShop, onLogout })
   const [time, setTime] = useState(new Date());
   const [config, setConfig] = useState(() => {
     const saved = localStorage.getItem(`pos_config_${shopId}`);
-    const parsed = saved ? JSON.parse(saved) : {};
-    return {
-      timeFormat: '12h', theme: 'light', scale: 1, gridCols: 3,
-      customPrices: { menu: {}, ingredients: {} }, customRecipes: {},
-      ...parsed,
+    return saved ? JSON.parse(saved) : {
+      timeFormat: '12h', theme: 'light', scale: 1, orderGridCols: 2,
+      customPrices: { menu: {}, ingredients: {} }, customRecipes: {}
     };
   });
   const [storeConfig, setStoreConfig] = useState(() => {
@@ -710,6 +828,9 @@ function POSApp({ shopId, userRole, memberships, user, onSwitchShop, onLogout })
   const [orders, setOrders] = useState([{ id: 1, items: [], total: 0, timestamp: Date.now() }]);
   const [activeOrderId, setActiveOrderId] = useState(1);
   const [inventory, setInventory] = useState({});
+  const [shiftRemarks, setShiftRemarks] = useState([]); // Now an array of log objects
+  const [pastRemarks, setPastRemarks] = useState([]); // Fetched from the shop document
+  const [showShopInfo, setShowShopInfo] = useState(false); // Replaces showCodeModal
 
   // --- UI STATE ---
   const [isAddMode, setIsAddMode] = useState(true);
@@ -818,8 +939,14 @@ function POSApp({ shopId, userRole, memberships, user, onSwitchShop, onLogout })
       // 1. Check for a locally-saved active shift
       const localRaw = localStorage.getItem(`pos_active_shift_${shopId}`);
       setHasLocalActiveShift(!!localRaw);
-      // 2. Fetch the most recent Firestore shift report
+      // 2. Fetch the most recent Firestore shift report & shop details
       try {
+        // Fetch past remarks from the shop document
+        const shopSnap = await getDoc(doc(db, 'shops', shopId));
+        if (shopSnap.exists()) {
+          setPastRemarks(shopSnap.data().recentRemarks || []);
+        }
+
         const q = query(
           collection(db, 'shops', shopId, 'shift_reports'),
           orderBy('timestamp', 'desc'),
@@ -969,6 +1096,12 @@ function POSApp({ shopId, userRole, memberships, user, onSwitchShop, onLogout })
     setActiveOrderId(newId);
   };
 
+  const handleToggleOrderStatus = (orderId, field) => {
+    setOrders(prev => prev.map(o => 
+      o.id === orderId ? { ...o, [field]: !o[field] } : o
+    ));
+  };
+
   // ==========================================================================
   // LOGIC: INVENTORY / MANUAL COUNT
   // ==========================================================================
@@ -1025,12 +1158,30 @@ function POSApp({ shopId, userRole, memberships, user, onSwitchShop, onLogout })
         savedBy: { uid: user.uid, name: user.displayName || user.email },
         sales: { total: spreadsheetData.grandTotalSales },
         inventorySnapshot,
+        remarks: shiftRemarks, // Attach the raw array to the specific report backup
       };
-      await addDoc(collection(db, 'shops', shopId, 'shift_reports'), shift_report);
+      
+      // 1. Save the Shift Report to the subcollection
+      const reportRef = await addDoc(collection(db, 'shops', shopId, 'shift_reports'), shift_report);
+      
+      // 2. Create a Summary Object for the Rolling Logbook (Only if there are remarks)
+      if (shiftRemarks && shiftRemarks.length > 0) {
+        const shiftSummary = {
+          shiftId: reportRef.id,
+          timestamp: Date.now(),
+          author: user.displayName || user.email,
+          messages: shiftRemarks
+        };
+        
+        const combinedRemarks = [shiftSummary, ...pastRemarks].slice(0, 20); // Keep last 20 shifts
+        await updateDoc(doc(db, 'shops', shopId), { recentRemarks: combinedRemarks });
+      }
+
       // Wipe local data only after successful cloud save
       localStorage.removeItem(`pos_active_shift_${shopId}`);
       setOrders([{ id: 1, items: [], total: 0, timestamp: Date.now() }]);
       setInventory({});
+      setShiftRemarks([]);
       setActiveOrderId(1);
       setShowReport(false);
       setShiftStarted(false);   // returns user to Setup Screen
@@ -1180,9 +1331,11 @@ function POSApp({ shopId, userRole, memberships, user, onSwitchShop, onLogout })
                       try {
                         const data = JSON.parse(localStorage.getItem(`pos_active_shift_${shopId}`));
                         if (data) {
-                          setOrders(data.orders);
-                          setInventory(data.inventory);
-                          setActiveOrderId(data.activeOrderId);
+                          setOrders(data.orders || [{ id: 1, items: [], total: 0, timestamp: Date.now() }]);
+                          setInventory(data.inventory || {});
+                          setActiveOrderId(data.activeOrderId || 1);
+                          // SAFELY HYDRATE ARRAYS TO PREVENT TEXT CORRUPTION:
+                          setShiftRemarks(Array.isArray(data.shiftRemarks) ? data.shiftRemarks : []);
                         }
                       } catch (_) {}
                       setShiftStarted(true);
@@ -1307,7 +1460,8 @@ function POSApp({ shopId, userRole, memberships, user, onSwitchShop, onLogout })
         scrollToLatest={scrollToLatest}
         onOpenAccountSettings={() => setShowSettings(true)}
         shopCode={shopCode}
-        onCodeClick={() => setShowCodeModal(true)}
+        onCodeClick={() => setShowShopInfo(true)}
+        onToggleOrderStatus={handleToggleOrderStatus}
       />
 
       <MenuGrid
@@ -1320,27 +1474,109 @@ function POSApp({ shopId, userRole, memberships, user, onSwitchShop, onLogout })
         config={config}
       />
 
-      {/* ── Shop Code Enlarge Modal ── */}
-      {showCodeModal && shopCode && (
-        <div
-          className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-6"
-          onClick={() => setShowCodeModal(false)}
-        >
-          <div className="bg-gray-900 border border-yellow-400/40 rounded-3xl shadow-2xl flex flex-col items-center gap-3 px-10 py-8 animate-in zoom-in duration-200">
-            <p className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Shop Join Code</p>
-            <span
-              className="text-6xl font-black text-yellow-300 tracking-[0.3em]"
-              style={{ fontFamily: "'Courier New', Courier, monospace" }}
-            >
-              {shopCode}
-            </span>
-            <p className="text-[10px] text-gray-600 font-bold mt-1">Share this code with your staff</p>
-            <button
-              onClick={() => setShowCodeModal(false)}
-              className="mt-2 px-6 py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-xl text-xs font-bold transition-colors"
-            >
-              Close
-            </button>
+      {/* ── Shop Info & Logbook Modal ── */}
+      {showShopInfo && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4 sm:p-6" onClick={() => setShowShopInfo(false)}>
+          <div className="bg-white dark:bg-gray-900 rounded-3xl shadow-2xl w-full max-w-lg flex flex-col max-h-[90vh] overflow-hidden" onClick={e => e.stopPropagation()}>
+            
+            {/* Header: Shop Details */}
+            <div className="bg-gray-900 p-6 text-white flex flex-col items-center border-b-4 border-blue-500 relative shrink-0">
+              <button onClick={() => setShowShopInfo(false)} className="absolute top-4 right-4 p-1 hover:bg-gray-800 rounded-full transition-colors text-gray-400 hover:text-white"><X size={20} /></button>
+              <Store size={32} className="text-blue-400 mb-2" />
+              <h2 className="text-2xl font-black uppercase tracking-tight">{shopNames?.[shopId] || 'Shop Info'}</h2>
+              <div className="flex gap-4 mt-4 bg-gray-800 p-3 rounded-2xl border border-gray-700 w-full justify-center text-center shadow-inner">
+                <div>
+                  <p className="text-[9px] font-bold text-gray-400 uppercase tracking-widest">Join Code</p>
+                  <p className="font-mono text-xl font-black text-yellow-400 tracking-widest">{shopCode}</p>
+                </div>
+                <div className="w-px bg-gray-700"></div>
+                <div>
+                  <p className="text-[9px] font-bold text-gray-400 uppercase tracking-widest">Your Role</p>
+                  <p className="text-sm font-black text-blue-400 mt-1 uppercase">{userRole}</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Logbook Feed */}
+            <div className="flex-1 overflow-y-auto p-4 bg-gray-50 dark:bg-gray-950 space-y-4 custom-scrollbar">
+              
+              {/* CURRENT SHIFT NOTES (Live) */}
+              <div className="bg-blue-50 dark:bg-blue-900/10 border-2 border-blue-200 dark:border-blue-800 p-3 rounded-2xl">
+                <p className="text-[10px] font-black text-blue-600 dark:text-blue-400 uppercase tracking-widest mb-2 flex items-center gap-1">
+                  <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></span> Current Shift
+                </p>
+                <div className="space-y-2">
+                  {shiftRemarks.length === 0 ? (
+                    <p className="text-xs text-gray-500 italic font-medium">No remarks logged yet.</p>
+                  ) : (
+                    shiftRemarks.map(remark => (
+                      <div key={remark.id} className="bg-white dark:bg-gray-800 p-2 rounded-xl shadow-sm">
+                        <p className="text-sm text-gray-800 dark:text-gray-200 font-medium break-words leading-snug">{remark.text}</p>
+                        <p className="text-[9px] text-gray-400 font-bold mt-1">
+                          {new Date(remark.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </p>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              {/* PAST SHIFT LOGS */}
+              <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest text-center mt-4 border-b dark:border-gray-800 pb-2">Past Shifts</p>
+              
+              {pastRemarks.length === 0 && <p className="text-xs text-center text-gray-500 italic">No past logs available.</p>}
+              
+              {pastRemarks.map((shiftLog, index) => (
+                <div key={index} className="bg-white dark:bg-gray-800 p-3 rounded-2xl border border-gray-200 dark:border-gray-700 shadow-sm">
+                  <div className="flex justify-between items-center mb-2 border-b dark:border-gray-700 pb-1">
+                    <span className="text-xs font-black text-gray-700 dark:text-gray-300 uppercase">{shiftLog.author}</span>
+                    <span className="text-[9px] font-bold text-gray-400">
+                      {new Date(shiftLog.timestamp).toLocaleDateString([], { month: 'short', day: 'numeric' })}
+                    </span>
+                  </div>
+                  <ul className="space-y-1">
+                    {shiftLog.messages?.map((msg, i) => (
+                      <li key={i} className="text-xs text-gray-600 dark:text-gray-400 font-medium break-words flex gap-2">
+                        <span className="text-[9px] font-bold text-gray-400 shrink-0 mt-0.5">
+                          {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}:
+                        </span>
+                        <span>{msg.text}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+            </div>
+
+            {/* Input Area */}
+            <div className="p-4 bg-white dark:bg-gray-900 border-t dark:border-gray-800 flex gap-2 shrink-0">
+              <input 
+                id="logInput"
+                type="text" 
+                placeholder="Type a note for this shift..." 
+                className="flex-1 bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl px-4 py-3 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-blue-500 dark:text-white"
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && e.target.value.trim() !== '') {
+                    const val = e.target.value.trim();
+                    setShiftRemarks(prev => [...(Array.isArray(prev) ? prev : []), { id: Date.now(), timestamp: Date.now(), text: val, author: user.displayName || user.email }]);
+                    e.target.value = '';
+                  }
+                }}
+              />
+              <button 
+                onClick={() => {
+                  const input = document.getElementById('logInput');
+                  if (input && input.value.trim() !== '') {
+                    const val = input.value.trim();
+                    setShiftRemarks(prev => [...(Array.isArray(prev) ? prev : []), { id: Date.now(), timestamp: Date.now(), text: val, author: user.displayName || user.email }]);
+                    input.value = '';
+                  }
+                }}
+                className="bg-blue-600 hover:bg-blue-700 text-white font-black px-5 rounded-xl shadow-md active:scale-95 transition-all text-xs"
+              >
+                ADD
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -1411,6 +1647,23 @@ function POSApp({ shopId, userRole, memberships, user, onSwitchShop, onLogout })
                       </button>
                     </div>
                   </div>
+
+                  <div>
+                    <h3 className="font-bold text-gray-800 dark:text-gray-200 mb-3 uppercase text-xs tracking-wider">Order List Columns</h3>
+                    <div className="flex gap-2">
+                      {[1, 2, 3, 4].map(num => (
+                        <button key={num} onClick={() => setConfig(p => ({ ...p, orderGridCols: num }))}
+                          className={`flex-1 py-2 rounded-lg font-bold border-2 transition-all flex items-center justify-center ${
+                            (config.orderGridCols || 2) === num
+                              ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400'
+                              : 'border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800'
+                          }`}>
+                          {num}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
                   {!isAppInstalled && deferredInstallPrompt && (
                     <div>
                       <h3 className="font-bold text-gray-800 dark:text-gray-200 mb-3 uppercase text-xs tracking-wider">Install App</h3>
@@ -1620,6 +1873,7 @@ function POSApp({ shopId, userRole, memberships, user, onSwitchShop, onLogout })
           handleTablePaste={handleTablePaste} handleEndShift={handleEndShift}
           closeKeypadRef={closeKeypadRef}
           onKeypadChange={setReportKeypadOpen}
+          shiftRemarks={shiftRemarks} setShiftRemarks={setShiftRemarks}
         />
       )}
 
