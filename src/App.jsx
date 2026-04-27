@@ -14,7 +14,6 @@ import {
   Moon,
   Sun,
   Clock,
-  Plus,
   Minus,
   FileText,
   History,
@@ -28,12 +27,20 @@ import {
   Key,
   Loader2,
   Trash2,
+  Edit2,
+  ArrowLeftRight,
+  Plus,
+  ChevronUp,
+  ChevronDown,
+  AlertTriangle,
 } from 'lucide-react';
 
 import {
   onAuthStateChanged,
+  onIdTokenChanged,
   signInWithPopup,
   signOut,
+  getIdToken,
 } from 'firebase/auth';
 import {
   doc,
@@ -47,22 +54,84 @@ import {
   addDoc,
   orderBy,
   limit,
+  deleteDoc,
+  deleteField,
+  disableNetwork,
+  enableNetwork,
 } from 'firebase/firestore';
 
 import { auth, db, googleProvider } from './firebase';
-import { angelsBurgerTemplate } from './templates/angelsBurger';
 import { useReportMath } from './hooks/useReportMath';
+import { useWakeUpRoutine } from './hooks/useWakeUpRoutine';
+import InitialLoader from './components/InitialLoader';
+
+// =============================================================================
+// INLINED TEMPLATES & HOOKS
+// =============================================================================
+
+// 1. Assembly Blueprint (Burger Stands, Milk Tea, Cafes)
+// Supports recipes (1 Burger = 1 Patty + 1 Bun) and full waste/ending reconciliation.
+const assemblyBlueprint = {
+  business: { type: 'assembly', hasWasteColumn: true, hasEndingReconciliation: true },
+  categories: [
+    { id: 'c1', name: 'Mains', color: 'red' },
+    { id: 'c2', name: 'Drinks', color: 'blue' },
+    { id: 'c3', name: 'Extras', color: 'yellow' }
+  ],
+  inventoryDb: {
+    'Buns': 5, 'Patty': 15, 'Cheese': 5, 'Egg': 10, 'Coke (Cup)': 15, 'Water': 10
+  },
+  menuItems: [
+    { id: 'm1', categoryId: 'c1', name: 'Beef Burger', price: 40, recipe: { 'Buns': 1, 'Patty': 1 } },
+    { id: 'm2', categoryId: 'c1', name: 'Cheese Burger', price: 50, recipe: { 'Buns': 1, 'Patty': 1, 'Cheese': 1 } },
+    { id: 'm3', categoryId: 'c2', name: 'Coke', price: 25, recipe: { 'Coke (Cup)': 1 } },
+    { id: 'e1', categoryId: 'c3', name: 'Add Egg', price: 15, recipe: { 'Egg': 1 } },
+    { id: 'custom_amount', categoryId: 'c3', name: 'Custom Value', price: 0, recipe: {} }
+  ]
+};
+
+// 2. Retail Blueprint (Sari-Sari, Meat Shop, Rice Retailer)
+// 1-to-1 inventory. Supports decimals. Hides Waste & Ending columns for perpetual tracking.
+const retailBlueprint = {
+  business: { type: 'retail', hasWasteColumn: false, hasEndingReconciliation: false },
+  categories: [
+    { id: 'c1', name: 'Beverages', color: 'blue' },
+    { id: 'c2', name: 'Pantry', color: 'red' },
+    { id: 'c3', name: 'Produce/Meat', color: 'green' }
+  ],
+  inventoryDb: {
+    'Coke 1.5L': 65, 'Bottled Water': 15, 'Canned Corned Beef': 45, 'Rice (per kg)': 50, 'Chicken (per kg)': 180
+  },
+  menuItems: [
+    { id: 'm1', categoryId: 'c1', name: 'Coke 1.5L', price: 75, recipe: { 'Coke 1.5L': 1 } },
+    { id: 'm2', categoryId: 'c1', name: 'Bottled Water', price: 20, recipe: { 'Bottled Water': 1 } },
+    { id: 'm3', categoryId: 'c2', name: 'Corned Beef', price: 55, recipe: { 'Canned Corned Beef': 1 } },
+    { id: 'm4', categoryId: 'c3', name: 'Rice (1kg)', price: 55, recipe: { 'Rice (per kg)': 1 } },
+    { id: 'm5', categoryId: 'c3', name: 'Chicken (1kg)', price: 200, recipe: { 'Chicken (per kg)': 1 } },
+    { id: 'custom_amount', categoryId: 'c3', name: 'Custom Value', price: 0, recipe: {} }
+  ]
+};
+
+// 3. Blank Blueprint (For owners who want to build from scratch)
+const blankBlueprint = {
+  business: { type: 'custom', hasWasteColumn: true, hasEndingReconciliation: true },
+  categories: [],
+  inventoryDb: {},
+  menuItems: [
+    { id: 'custom_amount', categoryId: 'c1', name: 'Custom Value', price: 0, recipe: {} }
+  ]
+};
 
 // =============================================================================
 // CONSTANTS
 // =============================================================================
 const COLOR_MAP = {
-  red:    { bg: 'bg-red-600',    text: 'text-white' },
+  red: { bg: 'bg-red-600', text: 'text-white' },
   yellow: { bg: 'bg-yellow-400', text: 'text-yellow-900' },
-  blue:   { bg: 'bg-blue-500',   text: 'text-white' },
-  green:  { bg: 'bg-green-500',  text: 'text-white' },
+  blue: { bg: 'bg-blue-500', text: 'text-white' },
+  green: { bg: 'bg-green-500', text: 'text-white' },
   purple: { bg: 'bg-purple-500', text: 'text-white' },
-  gray:   { bg: 'bg-gray-500',   text: 'text-white' },
+  gray: { bg: 'bg-gray-500', text: 'text-white' },
 };
 
 const generateJoinCode = () =>
@@ -123,16 +192,16 @@ const OrderCard = ({ order, isActive, onSelect, onToggleStatus }) => {
   const handleEnd = () => {
     if (!isDragging) return;
     setIsDragging(false);
-    
+
     // Trigger thresholds
     if (offset > 60) onToggleStatus(order.id, 'isServed'); // Slide Right
     else if (offset < -60) onToggleStatus(order.id, 'isPaid'); // Slide Left
-    
+
     setOffset(0);
   };
 
   return (
-    <div className="relative overflow-hidden rounded-xl h-fit">
+    <div className="relative overflow-hidden rounded-xl h-full">
       {/* Background Action Indicators */}
       <div className="absolute inset-0 flex justify-between items-center text-white font-black text-xs px-4 rounded-xl">
         <div className={`absolute inset-y-0 left-0 w-1/2 bg-blue-500 flex items-center px-4 transition-opacity ${offset > 0 ? 'opacity-100' : 'opacity-0'}`}>
@@ -160,11 +229,10 @@ const OrderCard = ({ order, isActive, onSelect, onToggleStatus }) => {
           transform: `translateX(${offset}px)`,
           transition: isDragging ? 'none' : 'transform 0.2s ease-out'
         }}
-        className={`relative z-10 cursor-pointer border-2 rounded-xl p-2 transition-colors flex flex-col select-none touch-pan-y ${
-          isActive
+        className={`relative z-10 h-full cursor-pointer border-2 rounded-xl p-2 transition-colors flex flex-col select-none touch-pan-y ${isActive
             ? 'border-yellow-400 bg-white dark:bg-gray-800 shadow-md ring-2 ring-yellow-400/30 scale-[1.02]'
             : 'border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-800 hover:border-yellow-300 dark:hover:border-yellow-600 opacity-95 hover:opacity-100'
-        }`}
+          }`}
       >
         <div className="flex justify-between items-start mb-2 border-b border-gray-100 dark:border-gray-700 pb-1">
           <div className="flex flex-col">
@@ -188,30 +256,543 @@ const OrderCard = ({ order, isActive, onSelect, onToggleStatus }) => {
   );
 };
 
-const FallbackScreen = ({ onLoadTemplate }) => (
-  <div className="h-[100dvh] flex flex-col items-center justify-center bg-gray-100 dark:bg-gray-950 font-sans p-8 text-center">
-    <div className="bg-white dark:bg-gray-900 rounded-3xl shadow-2xl p-10 max-w-sm w-full border border-gray-200 dark:border-gray-800 flex flex-col items-center gap-6">
-      <div className="bg-red-100 dark:bg-red-900/20 p-6 rounded-full">
-        <ShoppingCart size={64} className="text-red-600 dark:text-red-400" />
+// =============================================================================
+// PANEL: Store Setup Wizard (With Linked/Unlinked Cloning)
+// =============================================================================
+const StoreSetupWizard = ({ onSelectBlueprint, onSaveDirect, db, shopNames, currentShopId }) => {
+  const [selectedType, setSelectedType] = useState('assembly');
+  const [selectedCloneId, setSelectedCloneId] = useState('');
+  const [cloneMode, setCloneMode] = useState('unlinked'); // 'unlinked' | 'linked'
+  const [isCloning, setIsCloning] = useState(false);
+  const fileInputRef = React.useRef(null);
+
+  const handleFileSelect = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const importedData = JSON.parse(ev.target.result);
+        if (!importedData.categories || !importedData.menuItems) {
+          alert("Invalid Schema File. Missing categories or menuItems.");
+          return;
+        }
+        // Dispatch to Schema Builder
+        onSelectBlueprint({ ...importedData, isLinked: false, sourceShopId: null });
+      } catch (err) {
+        alert("Failed to parse the JSON schema file.");
+      } finally {
+        if(fileInputRef.current) fileInputRef.current.value = '';
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  // Filter out the current shop so they can't clone themselves
+  const availableShops = Object.entries(shopNames || {}).filter(([id]) => id !== currentShopId);
+
+  const handleApplyDefault = () => {
+    if (selectedType === 'assembly') onSelectBlueprint(assemblyBlueprint);
+    else if (selectedType === 'retail') onSelectBlueprint(retailBlueprint);
+    else if (selectedType === 'blank') onSelectBlueprint(blankBlueprint);
+  };
+
+  const handleCloneSchema = async () => {
+    if (!selectedCloneId) return;
+    setIsCloning(true);
+    try {
+      const schemaRef = doc(db, 'shops', selectedCloneId, 'config', 'schema');
+      // Cache-first fetch
+      let schemaSnap = await getDoc(schemaRef, { source: 'cache' });
+      if (!schemaSnap.exists()) {
+        schemaSnap = await getDoc(schemaRef, { source: 'server' });
+      }
+
+      if (schemaSnap.exists()) {
+
+        const clonedSchema = schemaSnap.data();
+
+        if (cloneMode === 'linked') {
+          // LINKED: Bypass the Schema Builder and save directly as a franchise node
+          onSaveDirect({ ...clonedSchema, isLinked: true, sourceShopId: selectedCloneId });
+        } else {
+          // UNLINKED: Strip any existing links and send to the Schema Builder for local editing
+          onSelectBlueprint({ ...clonedSchema, isLinked: false, sourceShopId: null });
+        }
+      } else {
+        alert("The selected shop does not have an active schema configured yet.");
+      }
+    } catch (err) {
+      console.error("Error cloning schema:", err);
+      alert("Failed to copy the schema. Check your connection and permissions.");
+    } finally {
+      setIsCloning(false);
+    }
+  };
+
+  return (
+    <div className="min-h-[100dvh] flex flex-col items-center justify-center bg-gray-100 dark:bg-gray-950 font-sans p-4 sm:p-8">
+      <div className="bg-white dark:bg-gray-900 rounded-3xl shadow-2xl p-6 sm:p-10 max-w-3xl w-full border border-gray-200 dark:border-gray-800 flex flex-col gap-6 animate-in fade-in zoom-in duration-300">
+
+        <div className="text-center mb-2">
+          <h1 className="text-2xl sm:text-3xl font-black uppercase tracking-tight text-gray-800 dark:text-gray-100">Store Blueprint</h1>
+          <p className="text-sm text-gray-500 font-bold mt-2">Initialize your schema by cloning an existing branch, or starting fresh.</p>
+        </div>
+
+        {/* ── CLONE EXISTING SHOP SECTION ── */}
+        {availableShops.length > 0 && (
+          <div className="bg-blue-50 dark:bg-blue-900/10 p-4 sm:p-5 rounded-2xl border-2 border-blue-200 dark:border-blue-800/50 flex flex-col gap-4 overflow-hidden">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 sm:gap-4 w-full">
+              <div className="text-left flex-1 min-w-0 w-full">
+                <h3 className="font-black text-blue-800 dark:text-blue-300 uppercase tracking-widest text-sm mb-1 flex items-center gap-2">
+                  <Store size={16} className="shrink-0" /> Clone Existing Branch
+                </h3>
+                <p className="text-xs text-blue-600 dark:text-blue-400 font-medium leading-snug">Copy the setup from another shop you manage.</p>
+              </div>
+
+              {/* Fix: Added min-w-0 to parent and select to prevent flex blowout */}
+              <div className="flex gap-2 w-full sm:w-auto min-w-0">
+                <select
+                  value={selectedCloneId}
+                  onChange={(e) => setSelectedCloneId(e.target.value)}
+                  // Fix: min-w-0 and text-ellipsis forces the long text to fit the screen
+                  className="flex-1 min-w-0 text-ellipsis sm:w-48 p-3 rounded-xl border border-blue-200 dark:border-blue-800 bg-white dark:bg-gray-900 text-sm font-bold text-gray-800 dark:text-white outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="" disabled>Select a shop...</option>
+                  {availableShops.map(([id, name]) => (
+                    <option key={id} value={id}>{name}</option>
+                  ))}
+                </select>
+                <button
+                  onClick={handleCloneSchema}
+                  disabled={!selectedCloneId || isCloning}
+                  // Fix: shrink-0 ensures the button never gets squished
+                  className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-5 sm:px-6 py-3 rounded-xl font-black text-xs uppercase tracking-widest transition-colors shadow-md shrink-0"
+                >
+                  {isCloning ? 'Copying...' : 'Clone'}
+                </button>
+              </div>
+            </div>
+
+            {/* Linked vs Unlinked Toggle */}
+            {selectedCloneId && (
+              <div className="flex flex-col sm:flex-row gap-2 sm:gap-3 pt-3 border-t border-blue-200 dark:border-blue-800/50">
+                <label className={`flex-1 flex items-start gap-2 p-3 rounded-xl border-2 cursor-pointer transition-all ${cloneMode === 'unlinked' ? 'border-blue-500 bg-white dark:bg-gray-800' : 'border-transparent hover:bg-blue-100 dark:hover:bg-blue-900/30'}`}>
+                  <input type="radio" name="cloneMode" checked={cloneMode === 'unlinked'} onChange={() => setCloneMode('unlinked')} className="mt-1 shrink-0" />
+                  <div>
+                    <span className="block text-xs font-black text-gray-800 dark:text-gray-200 uppercase">Independent Copy</span>
+                    <span className="block text-[10px] text-gray-500 mt-0.5 leading-tight">Creates a standalone copy. You can edit this branch without affecting the original.</span>
+                  </div>
+                </label>
+                <label className={`flex-1 flex items-start gap-2 p-3 rounded-xl border-2 cursor-pointer transition-all ${cloneMode === 'linked' ? 'border-blue-500 bg-white dark:bg-gray-800' : 'border-transparent hover:bg-blue-100 dark:hover:bg-blue-900/30'}`}>
+                  <input type="radio" name="cloneMode" checked={cloneMode === 'linked'} onChange={() => setCloneMode('linked')} className="mt-1 shrink-0" />
+                  <div>
+                    <span className="block text-xs font-black text-gray-800 dark:text-gray-200 uppercase">Linked Franchise</span>
+                    <span className="block text-[10px] text-gray-500 mt-0.5 leading-tight">Locks this branch to the Master schema. Updating the Master automatically updates this shop.</span>
+                  </div>
+                </label>
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className="flex items-center gap-4 my-1">
+          <div className="h-px bg-gray-200 dark:bg-gray-800 flex-1"></div>
+          <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">OR START FROM SCRATCH</span>
+          <div className="h-px bg-gray-200 dark:bg-gray-800 flex-1"></div>
+        </div>
+
+        {/* ── STANDARD BLUEPRINTS ── */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          <button onClick={() => setSelectedType('assembly')} className={`flex flex-col items-start text-left p-5 rounded-2xl border-2 transition-all ${selectedType === 'assembly' ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20 ring-4 ring-blue-500/20 scale-[1.02]' : 'border-gray-200 dark:border-gray-800 hover:border-blue-300 dark:hover:border-blue-700 bg-white dark:bg-gray-800'}`}>
+            <div className={`p-3 rounded-xl mb-3 ${selectedType === 'assembly' ? 'bg-blue-500 text-white' : 'bg-gray-100 dark:bg-gray-700 text-gray-500'}`}><Store size={24} /></div>
+            <h3 className={`font-black text-lg ${selectedType === 'assembly' ? 'text-blue-700 dark:text-blue-400' : 'text-gray-800 dark:text-gray-200'}`}>Assembly / F&B</h3>
+            <p className="text-xs text-gray-500 font-medium mt-1 leading-snug">Burger stands, Cafes, Milk Tea. Requires full end-of-shift counting.</p>
+          </button>
+
+          <button onClick={() => setSelectedType('retail')} className={`flex flex-col items-start text-left p-5 rounded-2xl border-2 transition-all ${selectedType === 'retail' ? 'border-green-500 bg-green-50 dark:bg-green-900/20 ring-4 ring-green-500/20 scale-[1.02]' : 'border-gray-200 dark:border-gray-800 hover:border-green-300 dark:hover:border-green-700 bg-white dark:bg-gray-800'}`}>
+            <div className={`p-3 rounded-xl mb-3 ${selectedType === 'retail' ? 'bg-green-500 text-white' : 'bg-gray-100 dark:bg-gray-700 text-gray-500'}`}><ShoppingCart size={24} /></div>
+            <h3 className={`font-black text-lg ${selectedType === 'retail' ? 'text-green-700 dark:text-green-400' : 'text-gray-800 dark:text-gray-200'}`}>Direct Retail</h3>
+            <p className="text-xs text-gray-500 font-medium mt-1 leading-snug">Sari-Sari, Meat, Produce. 1-to-1 inventory, perpetual tracking without waste logs.</p>
+          </button>
+
+          <button onClick={() => setSelectedType('blank')} className={`flex flex-col items-start text-left p-5 rounded-2xl border-2 transition-all ${selectedType === 'blank' ? 'border-purple-500 bg-purple-50 dark:bg-purple-900/20 ring-4 ring-purple-500/20 scale-[1.02]' : 'border-gray-200 dark:border-gray-800 hover:border-purple-300 dark:hover:border-purple-700 bg-white dark:bg-gray-800'}`}>
+            <div className={`p-3 rounded-xl mb-3 ${selectedType === 'blank' ? 'bg-purple-500 text-white' : 'bg-gray-100 dark:bg-gray-700 text-gray-500'}`}><FileText size={24} /></div>
+            <h3 className={`font-black text-lg ${selectedType === 'blank' ? 'text-purple-700 dark:text-purple-400' : 'text-gray-800 dark:text-gray-200'}`}>Blank Canvas</h3>
+            <p className="text-xs text-gray-500 font-medium mt-1 leading-snug">Start completely from scratch. Define all columns, categories, and inventory manually.</p>
+          </button>
+
+          {/* Import Schema Option */}
+          <button onClick={() => fileInputRef.current?.click()} className="flex flex-col items-start text-left p-5 rounded-2xl border-2 border-dashed transition-all border-gray-300 dark:border-gray-700 hover:border-orange-400 dark:hover:border-orange-600 bg-gray-50 dark:bg-gray-800/50 hover:bg-orange-50 dark:hover:bg-orange-900/10">
+            <div className="p-3 rounded-xl mb-3 bg-orange-100 dark:bg-orange-900/30 text-orange-600 dark:text-orange-400"><Upload size={24} /></div>
+            <h3 className="font-black text-lg text-orange-700 dark:text-orange-400">Import (.JSON)</h3>
+            <p className="text-xs text-gray-500 font-medium mt-1 leading-snug">Upload a previously exported configuration to setup your store instantly.</p>
+          </button>
+          <input type="file" accept=".json" ref={fileInputRef} onChange={handleFileSelect} className="hidden" />
+        </div>
+
+        <div className="pt-4 border-t border-gray-200 dark:border-gray-800 flex justify-end">
+          <button onClick={handleApplyDefault} className="px-8 py-4 bg-gray-900 dark:bg-white text-white dark:text-gray-900 font-black rounded-xl shadow-lg active:scale-95 transition-all uppercase tracking-widest text-sm">
+            Load Template
+          </button>
+        </div>
       </div>
-      <div>
-        <h1 className="text-2xl font-black uppercase tracking-tight text-gray-800 dark:text-gray-100">No Shop Configuration</h1>
-        <p className="text-sm text-gray-400 dark:text-gray-500 font-bold mt-2">Load a template to get started.</p>
-      </div>
-      <button
-        onClick={onLoadTemplate}
-        className="w-full py-4 bg-red-600 hover:bg-red-700 text-white font-black rounded-2xl shadow-xl active:scale-95 transition-all border-b-4 border-red-800 uppercase tracking-widest"
-      >
-        Load Angel's Burger Template
-      </button>
     </div>
-  </div>
-);
+  );
+};
+
+// =============================================================================
+// MODAL: Schema Editor Add/Edit Component
+// =============================================================================
+const SchemaModal = ({ modal, setModal, onSave, draft }) => {
+  const [form, setForm] = useState(
+    modal.mode === 'edit'
+      ? { ...modal.data, oldName: modal.data.name }
+      : { name: '', price: '', color: 'blue', categoryId: draft.categories[0]?.id || '', recipe: {} }
+  );
+
+  return (
+    <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-[100] p-4 animate-in fade-in">
+      <div className="bg-white dark:bg-gray-900 p-6 rounded-3xl w-full max-w-sm shadow-2xl border border-gray-200 dark:border-gray-800">
+        <div className="flex justify-between items-center mb-4">
+          <h2 className="text-lg font-black uppercase text-gray-800 dark:text-gray-100">{modal.mode === 'edit' ? 'Edit' : 'Add'} Item</h2>
+          <button onClick={() => setModal(null)} className="text-gray-400 hover:text-red-500"><X size={20} /></button>
+        </div>
+
+        <div className="space-y-3">
+          <input placeholder="Name" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} className="w-full p-3 bg-gray-50 dark:bg-gray-800 border dark:border-gray-700 rounded-xl font-bold dark:text-white outline-none focus:border-blue-500" />
+
+          {modal.type === 'categories' && (
+            <select value={form.color} onChange={e => setForm({ ...form, color: e.target.value })} className="w-full p-3 bg-gray-50 dark:bg-gray-800 border dark:border-gray-700 rounded-xl font-bold dark:text-white outline-none">
+              <option value="red">Red</option><option value="blue">Blue</option><option value="green">Green</option><option value="yellow">Yellow</option><option value="purple">Purple</option><option value="gray">Gray</option>
+            </select>
+          )}
+
+          {(modal.type === 'inventory' || modal.type === 'menuItems') && (
+            <input type="number" placeholder={modal.type === 'inventory' ? "Default Cost" : "Selling Price"} value={form.price} onChange={e => setForm({ ...form, price: e.target.value })} className="w-full p-3 bg-gray-50 dark:bg-gray-800 border dark:border-gray-700 rounded-xl font-bold dark:text-white outline-none focus:border-blue-500" />
+          )}
+
+          {modal.type === 'menuItems' && (
+            <>
+              <select value={form.categoryId} onChange={e => setForm({ ...form, categoryId: e.target.value })} className="w-full p-3 bg-gray-50 dark:bg-gray-800 border dark:border-gray-700 rounded-xl font-bold dark:text-white outline-none">
+                <option value="" disabled>Select Category...</option>
+                {draft.categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+              <div className="mt-4 border-t dark:border-gray-800 pt-3">
+                <p className="text-xs font-black uppercase text-gray-400 mb-2">Recipe / Components</p>
+                <div className="max-h-32 overflow-y-auto space-y-1 custom-scrollbar pr-1">
+                  {Object.keys(draft.inventoryDb).length === 0 ? <p className="text-xs italic text-gray-500">Add inventory items first.</p> : Object.keys(draft.inventoryDb).map(invName => (
+                    <div key={invName} className="flex justify-between items-center bg-gray-50 dark:bg-gray-800 p-2 rounded-lg">
+                      <span className="text-xs font-bold dark:text-gray-300">{invName}</span>
+                      <input type="number" placeholder="Qty" value={form.recipe?.[invName] || ''} onChange={e => {
+                        const val = parseFloat(e.target.value);
+                        const newRecipe = { ...form.recipe };
+                        if (val > 0) newRecipe[invName] = val; else delete newRecipe[invName];
+                        setForm({ ...form, recipe: newRecipe });
+                      }} className="w-16 p-1 text-center border dark:border-gray-700 rounded bg-white dark:bg-gray-900 dark:text-white text-xs font-black" />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+
+        <button onClick={() => onSave(form)} disabled={!form.name} className="w-full mt-4 bg-blue-600 hover:bg-blue-700 text-white font-black py-3 rounded-xl disabled:opacity-50 disabled:cursor-not-allowed">
+          Save Item
+        </button>
+      </div>
+    </div>
+  );
+};
+
+// =============================================================================
+// PANEL: Schema Builder
+// =============================================================================
+const SchemaBuilder = ({ blueprint, onSave, onCancel }) => {
+  const [draft, setDraft] = useState(blueprint);
+  const [activeTab, setActiveTab] = useState('menuItems');
+  const [modal, setModal] = useState(null);
+
+  // --- HANDLERS ---
+  const removeItem = (listKey, itemId) => {
+    setDraft(p => ({ ...p, [listKey]: p[listKey].filter(i => i.id !== itemId) }));
+  };
+
+  const removeInventoryItem = (keyToRemove) => {
+    setDraft(p => {
+      const newInv = { ...p.inventoryDb }; delete newInv[keyToRemove];
+      return { ...p, inventoryDb: newInv };
+    });
+  };
+
+  const handleInjectCustomValue = () => {
+    if (draft.categories.length === 0) return alert("Please create at least one Category first!");
+    if (draft.menuItems.some(m => m.id === 'custom_amount')) return alert("Custom Value item already exists in the menu!");
+
+    setDraft(prev => ({
+      ...prev,
+      menuItems: [
+        ...prev.menuItems,
+        { id: 'custom_amount', categoryId: prev.categories[0].id, name: 'Custom Value', price: 0, recipe: {} }
+      ]
+    }));
+  };
+
+  const handleModalSave = (formData) => {
+    setDraft(prev => {
+      // 1. Shallow copy the main draft object
+      const next = { ...prev };
+
+      if (modal.type === 'categories') {
+        if (modal.mode === 'add') {
+          // FIX: Create a NEW array using spread, preventing double-mutation
+          next.categories = [...prev.categories, { id: `c_${Date.now()}`, name: formData.name, color: formData.color }];
+        } else {
+          next.categories = prev.categories.map(c => c.id === formData.id ? formData : c);
+        }
+      }
+      else if (modal.type === 'inventory') {
+        // FIX: Clone the inventory object before modifying keys
+        next.inventoryDb = { ...prev.inventoryDb };
+        if (modal.mode === 'edit' && formData.oldName && formData.oldName !== formData.name) {
+          delete next.inventoryDb[formData.oldName];
+        }
+        next.inventoryDb[formData.name] = Number(formData.price);
+      }
+      else if (modal.type === 'menuItems') {
+        if (modal.mode === 'add') {
+          // FIX: Create a NEW array using spread
+          next.menuItems = [...prev.menuItems, { id: `m_${Date.now()}`, ...formData }];
+        } else {
+          next.menuItems = prev.menuItems.map(m => m.id === formData.id ? formData : m);
+        }
+      }
+
+      return next;
+    });
+    setModal(null);
+  };
+
+  // --- BULLETPROOF REORDERING LOGIC ---
+  const moveItem = (listKey, index, direction) => {
+    setDraft(prev => {
+      const newIndex = direction === 'up' ? index - 1 : index + 1;
+
+      if (listKey === 'inventoryDb') {
+        const entries = Object.entries(prev.inventoryDb);
+        if (newIndex < 0 || newIndex >= entries.length) return prev;
+        // Swap
+        const temp = entries[index];
+        entries[index] = entries[newIndex];
+        entries[newIndex] = temp;
+        return { ...prev, inventoryDb: Object.fromEntries(entries) };
+      } else {
+        const list = [...prev[listKey]];
+        if (newIndex < 0 || newIndex >= list.length) return prev;
+        // Swap
+        const temp = list[index];
+        list[index] = list[newIndex];
+        list[newIndex] = temp;
+        return { ...prev, [listKey]: list };
+      }
+    });
+  };
+
+  return (
+    <div className="h-[100dvh] flex flex-col items-center justify-center bg-gray-100 dark:bg-gray-950 font-sans p-4 sm:p-8 relative">
+
+      {modal && <SchemaModal modal={modal} setModal={setModal} onSave={handleModalSave} draft={draft} />}
+
+      <div className="bg-white dark:bg-gray-900 rounded-3xl shadow-2xl w-full max-w-4xl flex flex-col h-[85vh] border border-gray-200 dark:border-gray-800 animate-in slide-in-from-right duration-300 overflow-hidden">
+
+        {/* Header & Tool Actions */}
+        <div className="bg-gray-900 p-6 text-white shrink-0">
+          <div className="flex justify-between items-start">
+            <div>
+              <h1 className="text-xl font-black uppercase tracking-tight text-yellow-400">Schema Editor</h1>
+              <p className="text-xs text-gray-400 font-bold mt-1">Review and edit the {draft.business.type} template before launching.</p>
+            </div>
+            <div className="flex gap-3">
+              <button onClick={onCancel} className="px-4 py-2 bg-gray-800 hover:bg-gray-700 rounded-xl text-xs font-bold transition-colors">Cancel</button>
+              <button onClick={() => onSave(draft)} className="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-black shadow-md transition-all active:scale-95 border-b-2 border-blue-800">Save & Deploy</button>
+            </div>
+          </div>
+
+          <div className="flex gap-3 mt-4 pt-4 border-t border-gray-800">
+            <button
+              onClick={() => setModal({ type: activeTab, mode: 'add', data: null })}
+              className="flex items-center gap-1 bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-xs font-black transition-colors shadow-sm"
+            >
+              <Plus size={16} /> ADD NEW {activeTab.replace('Items', ' ITEM').replace('inventory', 'INVENTORY').replace('categories', 'CATEGORY')}
+            </button>
+
+            {activeTab === 'menuItems' && (
+              <button
+                onClick={handleInjectCustomValue}
+                className="flex items-center gap-1 bg-yellow-500 hover:bg-yellow-400 text-yellow-900 px-4 py-2 rounded-lg text-xs font-black transition-colors shadow-sm"
+              >
+                <Plus size={16} /> INJECT CUSTOM VALUE
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Tabs */}
+        <div className="flex overflow-x-auto bg-gray-100 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 shrink-0 custom-scrollbar">
+          {['categories', 'inventory', 'menuItems'].map(tab => (
+            <button key={tab} onClick={() => setActiveTab(tab)} className={`px-6 py-3 text-xs font-black uppercase tracking-widest transition-colors whitespace-nowrap ${activeTab === tab ? 'text-blue-600 bg-white dark:bg-gray-900 border-b-2 border-blue-600' : 'text-gray-500 hover:bg-gray-200 dark:hover:bg-gray-700'}`}>
+              {tab.replace('Items', ' Items')}
+            </button>
+          ))}
+        </div>
+
+        {/* Content Area */}
+        <div className="flex-1 overflow-y-auto p-4 sm:p-6 bg-gray-50 dark:bg-gray-950 custom-scrollbar">
+
+          {activeTab === 'categories' && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-3xl mx-auto">
+              {draft.categories.map((cat, index) => (
+                <div key={cat.id} className="flex justify-between items-center bg-white dark:bg-gray-800 p-3 sm:p-4 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 transition-colors hover:border-blue-300 dark:hover:border-blue-700">
+                  <div className="flex items-center">
+                    {/* Move Up/Down Controls */}
+                    <div className="flex flex-col mr-3 gap-0.5">
+                      <button disabled={index === 0} onClick={() => moveItem('categories', index, 'up')} className="text-gray-400 hover:text-blue-500 disabled:opacity-20 transition-opacity"><ChevronUp size={20} /></button>
+                      <button disabled={index === draft.categories.length - 1} onClick={() => moveItem('categories', index, 'down')} className="text-gray-400 hover:text-blue-500 disabled:opacity-20 transition-opacity"><ChevronDown size={20} /></button>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <span className={`w-3 h-3 rounded-full bg-${cat.color}-500 shadow-inner`}></span>
+                      <span className="font-black text-gray-800 dark:text-gray-200">{cat.name}</span>
+                    </div>
+                  </div>
+                  <div className="flex gap-1">
+                    <button onClick={() => setModal({ type: 'categories', mode: 'edit', data: cat })} className="text-gray-400 hover:text-blue-500 p-2"><Edit2 size={16} /></button>
+                    <button onClick={() => removeItem('categories', cat.id)} className="text-gray-400 hover:text-red-500 p-2"><Trash2 size={16} /></button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {activeTab === 'inventory' && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-3xl mx-auto">
+              {Object.entries(draft.inventoryDb).map(([name, price], index) => {
+                const isFirst = index === 0;
+                const isLast = index === Object.keys(draft.inventoryDb).length - 1;
+                return (
+                  <div key={name} className="flex justify-between items-center bg-white dark:bg-gray-800 p-3 sm:p-4 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 transition-colors hover:border-blue-300 dark:hover:border-blue-700">
+                    <div className="flex items-center">
+                      <div className="flex flex-col mr-3 gap-0.5">
+                        <button disabled={isFirst} onClick={() => moveItem('inventoryDb', index, 'up')} className="text-gray-400 hover:text-blue-500 disabled:opacity-20 transition-opacity"><ChevronUp size={20} /></button>
+                        <button disabled={isLast} onClick={() => moveItem('inventoryDb', index, 'down')} className="text-gray-400 hover:text-blue-500 disabled:opacity-20 transition-opacity"><ChevronDown size={20} /></button>
+                      </div>
+                      <span className="font-black text-gray-800 dark:text-gray-200">{name}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-gray-500 font-bold text-sm bg-gray-100 dark:bg-gray-900 px-2 py-1 rounded">₱{price}</span>
+                      <button onClick={() => setModal({ type: 'inventory', mode: 'edit', data: { name, price } })} className="text-gray-400 hover:text-blue-500 p-2"><Edit2 size={16} /></button>
+                      <button onClick={() => removeInventoryItem(name)} className="text-gray-400 hover:text-red-500 p-2"><Trash2 size={16} /></button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {activeTab === 'menuItems' && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {draft.menuItems.map((item, index) => (
+                <div key={item.id} className="bg-white dark:bg-gray-800 p-3 sm:p-4 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 flex justify-between items-start transition-colors hover:border-blue-300 dark:hover:border-blue-700">
+                  <div className="flex items-start">
+                    <div className="flex flex-col mr-3 gap-0.5 mt-1">
+                      <button disabled={index === 0} onClick={() => moveItem('menuItems', index, 'up')} className="text-gray-400 hover:text-blue-500 disabled:opacity-20 transition-opacity"><ChevronUp size={20} /></button>
+                      <button disabled={index === draft.menuItems.length - 1} onClick={() => moveItem('menuItems', index, 'down')} className="text-gray-400 hover:text-blue-500 disabled:opacity-20 transition-opacity"><ChevronDown size={20} /></button>
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h3 className="font-black text-gray-800 dark:text-gray-200">{item.name}</h3>
+                        {item.id === 'custom_amount' && <span className="text-[8px] bg-yellow-100 text-yellow-700 font-black px-1.5 py-0.5 rounded uppercase tracking-widest">Wildcard</span>}
+                      </div>
+                      <p className="text-lg font-black text-blue-600 dark:text-blue-400 leading-none mt-1">₱{item.price}</p>
+                      <div className="flex flex-wrap gap-1 mt-2">
+                        {Object.entries(item.recipe || {}).map(([ing, qty]) => (
+                          <span key={ing} className="text-[9px] font-bold bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 px-2 py-0.5 rounded-full border border-gray-200 dark:border-gray-600">{qty}x {ing}</span>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex gap-1 shrink-0">
+                    <button onClick={() => setModal({ type: 'menuItems', mode: 'edit', data: item })} className="text-gray-400 hover:text-blue-500 p-2"><Edit2 size={16} /></button>
+                    <button onClick={() => removeItem('menuItems', item.id)} className="text-gray-400 hover:text-red-500 p-2"><Trash2 size={16} /></button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+        </div>
+      </div>
+    </div>
+  );
+};
 
 // =============================================================================
 // ACCOUNT & SETTINGS MODAL  (inside POSApp)
 // =============================================================================
-const AccountSettingsModal = ({ user, memberships, shopNames, userRole, shopId, onSwitchShop, onLogout, onClose }) => (
+const AccountSettingsModal = ({ user, memberships, shopNames, userRole, shopId, onSwitchShop, onLogout, onClose }) => {
+  const handleExportSchema = async () => {
+    try {
+      // 1. Fetch the root shop doc and schema (Cache-First)
+      const shopRef = doc(db, 'shops', shopId);
+      const schemaRef = doc(db, 'shops', shopId, 'config', 'schema');
+      
+      let [shopSnap, schemaSnap] = await Promise.all([
+        getDoc(shopRef, { source: 'cache' }),
+        getDoc(schemaRef, { source: 'cache' })
+      ]);
+
+      if (!shopSnap.exists()) shopSnap = await getDoc(shopRef, { source: 'server' });
+      if (!schemaSnap.exists()) schemaSnap = await getDoc(schemaRef, { source: 'server' });
+
+      if (!schemaSnap.exists()) {
+
+        alert("No active schema to export.");
+        return;
+      }
+
+      const shopData = shopSnap.data() || {};
+      const schemaData = schemaSnap.data() || {};
+
+      // 2. Strip old transactions and format
+      const cleanSchema = {
+        name: (shopData.name || shopNames?.[shopId] || "My Shop") + " (Imported)",
+        business: schemaData.business,
+        categories: schemaData.categories,
+        inventoryDb: schemaData.inventoryDb,
+        menuItems: schemaData.menuItems
+      };
+
+      // 3. Convert to JSON
+      const jsonString = JSON.stringify(cleanSchema, null, 2);
+
+      // 4. Download
+      const blob = new Blob([jsonString], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `biz-schema-${shopId}-${new Date().toISOString().split('T')[0]}.json`;
+      
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error("Export failed:", error);
+      alert("Failed to export schema.");
+    }
+  };
+
+  return (
   <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[200] p-4 animate-in fade-in">
     <div className="bg-white dark:bg-gray-900 rounded-3xl shadow-2xl w-full max-w-md overflow-hidden animate-in zoom-in duration-200 border border-gray-200 dark:border-gray-800">
 
@@ -276,6 +857,12 @@ const AccountSettingsModal = ({ user, memberships, shopNames, userRole, shopId, 
       {/* Actions */}
       <div className="p-5 flex flex-col gap-3">
         <button
+          onClick={handleExportSchema}
+          className="w-full py-3 bg-blue-100 dark:bg-blue-900/30 text-blue-800 dark:text-blue-300 font-black rounded-2xl hover:bg-blue-200 dark:hover:bg-blue-900/50 active:scale-95 transition-all flex items-center justify-center gap-2 border border-blue-200 dark:border-blue-800"
+        >
+          <Download size={16} /> Export Schema
+        </button>
+        <button
           onClick={onSwitchShop}
           className="w-full py-3 bg-gray-100 dark:bg-gray-800 text-gray-800 dark:text-gray-200 font-black rounded-2xl hover:bg-gray-200 dark:hover:bg-gray-700 active:scale-95 transition-all flex items-center justify-center gap-2 border border-gray-200 dark:border-gray-700"
         >
@@ -290,12 +877,14 @@ const AccountSettingsModal = ({ user, memberships, shopNames, userRole, shopId, 
       </div>
     </div>
   </div>
-);
+  );
+};
 
 // =============================================================================
 // PANEL: OrderFeed
 // =============================================================================
 const OrderFeed = ({
+  shopName,
   storeConfig, orders, activeOrderId, setActiveOrderId,
   spreadsheetData, createNewOrder, time, config,
   setShowSettings, setDevContactModal,
@@ -307,72 +896,87 @@ const OrderFeed = ({
   const gridClass = { 1: 'grid-cols-1', 2: 'grid-cols-2', 3: 'grid-cols-3', 4: 'grid-cols-4' }[orderCols] || 'grid-cols-2';
 
   return (
-  <div className="w-full sm:w-[40%] md:w-[35%] flex-1 min-h-[30dvh] sm:h-[100dvh] bg-[#F8F9FA] dark:bg-gray-900 border-b sm:border-b-0 sm:border-r border-gray-300 dark:border-gray-800 flex flex-col z-20 relative">
+    <div className="w-full sm:w-[40%] md:w-[35%] flex-1 min-h-[30dvh] sm:h-[100dvh] bg-[#F8F9FA] dark:bg-gray-900 border-b sm:border-b-0 sm:border-r border-gray-300 dark:border-gray-800 flex flex-col z-20 relative">
 
-    <div className="bg-red-600 text-white px-2 py-2 shadow-sm flex justify-between items-center z-10 shrink-0 gap-1 tutorial-topbar">
-      <div className="flex flex-col items-start ml-1 shrink-0">
-        <h1 onClick={() => setDevContactModal(true)} className="text-xs sm:text-base font-black tracking-tight text-yellow-300 leading-none cursor-pointer hover:scale-105 transition-transform">
-          {storeConfig.business.name}
-        </h1>
-        <span className="text-white text-[9px] tracking-widest mt-0.5">BIZ POS</span>
-      </div>
-      <div className="flex gap-1 sm:gap-2">
-        <div className="flex flex-col items-center bg-black/20 px-2 sm:px-3 py-1 rounded-lg shadow-inner min-w-[70px] sm:min-w-[80px] justify-center">
-          <span className="text-[8px] font-bold text-red-200 uppercase tracking-widest mb-0.5">Revenue</span>
-          <span className="text-sm sm:text-base font-black text-white leading-none">
-            ₱{orders.reduce((sum, o) => sum + o.total, 0) + (spreadsheetData.adjustmentOrder?.total || 0)}
-          </span>
-        </div>
-        {shopCode && (
-          <button
-            onClick={() => onCodeClick(true)}
-            className="flex flex-col items-center bg-black/20 px-2 sm:px-3 py-1 rounded-lg shadow-inner min-w-[70px] sm:min-w-[80px] justify-center border border-blue-400/40 hover:bg-black/40 hover:border-blue-400/70 transition-all cursor-pointer active:scale-95"
-            title="Open Shop Info & Logbook"
+      <div className="bg-red-600 text-white px-2 py-2 shadow-sm flex justify-between items-center z-10 shrink-0 gap-2 tutorial-topbar">
+
+        {/* Title Container: flex-1 and min-w-0 forces it to respect available space */}
+        <div className="flex-1 min-w-0 ml-1 pr-1 flex items-center">
+          <h1
+            onClick={() => setDevContactModal(true)}
+            className="text-xs sm:text-sm font-black tracking-tight text-yellow-300 leading-tight cursor-pointer hover:scale-105 transition-transform line-clamp-2 break-words"
+            title={shopName || storeConfig.business.name}
           >
-            <span className="text-[8px] font-bold text-blue-200 uppercase tracking-widest mb-0.5">Shop Info</span>
-            <span className="text-sm sm:text-base font-black text-blue-300 leading-none tracking-widest uppercase">LOGBOOK</span>
-          </button>
-        )}
-        <div className="flex flex-col items-center bg-black/20 px-2 sm:px-3 py-1 rounded-lg shadow-inner min-w-[70px] sm:min-w-[80px] justify-center">
-          <span className="text-[8px] font-bold text-red-200 uppercase tracking-widest mb-0.5">Time</span>
-          <span className="text-[12px] sm:text-base font-black text-white leading-none whitespace-nowrap">
-            {time.toLocaleTimeString([], config.timeFormat === '24h'
-              ? { hour: '2-digit', minute: '2-digit', hour12: false }
-              : { hour: '2-digit', minute: '2-digit', hour12: true }
-            ).toLowerCase()}
-          </span>
+            {shopName || storeConfig.business.name}
+          </h1>
         </div>
-        {/* Account / Settings Icon */}
-        <button
-          onClick={onOpenAccountSettings}
-          className="flex items-center justify-center bg-black/20 px-2 sm:px-3 rounded-lg shadow-inner text-white hover:bg-black/40 transition-colors cursor-pointer"
-          title="Account & Settings"
-        >
-          <Settings size={20} />
-        </button>
+
+        {/* Cards Container: shrink-0 protects this area from being squished */}
+        <div className="flex gap-1 sm:gap-2 shrink-0">
+
+          {/* Revenue Card */}
+          <div className="flex flex-col items-center bg-black/20 px-2 sm:px-3 py-1 rounded-lg shadow-inner min-w-[70px] sm:min-w-[80px] justify-center">
+            <span className="text-[8px] font-bold text-red-200 uppercase tracking-widest mb-0.5">Revenue</span>
+            <span className="text-sm sm:text-base font-black text-white leading-none">
+              ₱{orders.reduce((sum, o) => sum + o.total, 0) + (spreadsheetData.adjustmentOrder?.total || 0)}
+            </span>
+          </div>
+
+          {/* Logbook / Shop Info Card */}
+          {shopCode && (
+            <button
+              onClick={() => onCodeClick(true)}
+              className="flex flex-col items-center bg-black/20 px-2 sm:px-3 py-1 rounded-lg shadow-inner min-w-[70px] sm:min-w-[80px] justify-center border border-blue-400/40 hover:bg-black/40 hover:border-blue-400/70 transition-all cursor-pointer active:scale-95"
+              title="Open Shop Info & Logbook"
+            >
+              <span className="text-[8px] font-bold text-blue-200 uppercase tracking-widest mb-0.5">Shop Info</span>
+              <span className="text-sm sm:text-base font-black text-blue-300 leading-none tracking-widest uppercase">LOGBOOK</span>
+            </button>
+          )}
+
+          {/* Time Card */}
+          <div className="flex flex-col items-center bg-black/20 px-2 sm:px-3 py-1 rounded-lg shadow-inner min-w-[70px] sm:min-w-[80px] justify-center">
+            <span className="text-[8px] font-bold text-red-200 uppercase tracking-widest mb-0.5">Time</span>
+            <span className="text-[12px] sm:text-base font-black text-white leading-none whitespace-nowrap">
+              {time.toLocaleTimeString([], config.timeFormat === '24h'
+                ? { hour: '2-digit', minute: '2-digit', hour12: false }
+                : { hour: '2-digit', minute: '2-digit', hour12: true }
+              ).toLowerCase()}
+            </span>
+          </div>
+
+          {/* Account / Settings Icon */}
+          <button
+            onClick={onOpenAccountSettings}
+            className="flex items-center justify-center bg-black/20 px-2 sm:px-3 rounded-lg shadow-inner text-white hover:bg-black/40 transition-colors cursor-pointer shrink-0"
+            title="Account & Settings"
+          >
+            <Settings size={20} />
+          </button>
+
+        </div>
       </div>
-    </div>
 
-    <div
-      ref={ordersContainerRef}
-      onScroll={handleOrdersScroll}
-      className={`flex-1 overflow-y-auto p-1 bg-gray-50 dark:bg-gray-950 content-start grid ${gridClass} gap-1 relative scroll-smooth tutorial-orderlist shadow-inner`}
-    >
-      {orders.map(order => (
-        <OrderCard key={order.id} order={order} isActive={activeOrderId === order.id} onSelect={setActiveOrderId} onToggleStatus={onToggleOrderStatus} />
-      ))}
-      <div ref={ordersEndRef} className="h-2 shrink-0" style={{ gridColumn: '1 / -1' }} />
-    </div>
-
-    {showScrollDown && (
-      <button
-        onClick={scrollToLatest}
-        className="absolute left-1/2 -translate-x-1/2 sm:left-auto sm:right-4 z-50 bg-blue-600 text-white px-4 py-2 rounded-full shadow-[0_4px_15px_-3px_rgba(37,99,235,0.5)] font-black text-xs flex items-center justify-center gap-1 hover:bg-blue-700 animate-in fade-in slide-in-from-bottom border-2 border-blue-400 active:scale-95 bottom-4"
+      <div
+        ref={ordersContainerRef}
+        onScroll={handleOrdersScroll}
+        className={`flex-1 overflow-y-auto p-1 bg-gray-50 dark:bg-gray-950 content-start grid auto-rows-max ${gridClass} gap-1 relative scroll-smooth tutorial-orderlist shadow-inner`}
       >
-        LATEST ORDER ↓
-      </button>
-    )}
-  </div>
+        {orders.map(order => (
+          <OrderCard key={order.id} order={order} isActive={activeOrderId === order.id} onSelect={setActiveOrderId} onToggleStatus={onToggleOrderStatus} />
+        ))}
+        <div ref={ordersEndRef} className="h-2 shrink-0" style={{ gridColumn: '1 / -1' }} />
+      </div>
+
+      {showScrollDown && (
+        <button
+          onClick={scrollToLatest}
+          className="absolute left-1/2 -translate-x-1/2 sm:left-auto sm:right-4 z-50 bg-blue-600 text-white px-4 py-2 rounded-full shadow-[0_4px_15px_-3px_rgba(37,99,235,0.5)] font-black text-xs flex items-center justify-center gap-1 hover:bg-blue-700 animate-in fade-in slide-in-from-bottom border-2 border-blue-400 active:scale-95 bottom-4"
+        >
+          LATEST ORDER ↓
+        </button>
+      )}
+    </div>
   );
 };
 
@@ -631,62 +1235,93 @@ function ReportModal({
             <thead className="sticky top-0 bg-gray-200 dark:bg-gray-800 border-b-2 border-gray-300 dark:border-gray-700 z-10">
               <tr className="text-gray-700 dark:text-gray-300 text-[10px] sm:text-xs uppercase tracking-wider">
                 <th className="p-2 border-r border-gray-300 font-black sticky left-0 z-20 bg-gray-200 dark:bg-gray-800 shadow-[1px_0_0_#9CA3AF] dark:shadow-[1px_0_0_#374151]">Item</th>
-                <th className="p-2 border-r border-gray-300 text-center font-bold bg-blue-50/50">Starting</th>
-                <th className="p-2 border-r border-gray-300 text-center font-bold bg-blue-50/50">Deliver</th>
-                <th className="p-2 border-r border-gray-300 text-center font-bold bg-red-50/50">Waste</th>
-                <th className="p-2 border-r border-gray-300 text-center font-black text-green-800 bg-green-50">Ending</th>
-                <th className="p-2 border-r border-gray-300 text-center font-bold text-blue-800 bg-gray-100">Sold</th>
-                <th className="p-2 border-r border-gray-300 text-right font-bold">Prices</th>
-                <th className="p-2 text-right font-black">Sales</th>
+                <th className="p-2 border-r border-gray-300 text-center font-bold bg-blue-50/50">Start</th>
+                <th className="p-2 border-r border-gray-300 text-center font-bold bg-blue-50/50">In</th>
+                {/* Conditionally render Waste */}
+                {storeConfig.business?.hasWasteColumn !== false && (
+                  <th className="p-2 border-r border-gray-300 text-center font-bold bg-red-50/50 text-orange-500">Waste</th>
+                )}
+                <th className="p-2 border-r border-gray-300 text-center font-bold text-gray-500 dark:text-gray-400">Sold</th>
+                <th className="p-2 border-r border-gray-300 text-center font-black text-blue-600 bg-blue-50">Theo. End</th>
+                {/* Conditionally render Reconciliation columns */}
+                {storeConfig.business?.hasEndingReconciliation !== false && (
+                  <>
+                    <th className="p-2 border-r border-gray-300 text-center font-black text-purple-600 dark:text-purple-400 bg-purple-50/30">Actual End</th>
+                    <th className="p-2 border-r border-gray-300 text-center font-bold text-red-500">Var.</th>
+                  </>
+                )}
+                <th className="p-2 text-right font-black text-green-600 dark:text-green-400">Sales</th>
               </tr>
             </thead>
             <tbody className="text-[11px] sm:text-sm divide-y divide-gray-200 dark:divide-gray-800 bg-white dark:bg-gray-900">
               {spreadsheetData.rows.map((row, idx) => (
                 <tr key={idx} className="hover:bg-gray-50 transition-colors">
                   <td className="p-2 border-r border-gray-200 dark:border-gray-800 font-bold text-gray-800 dark:text-gray-200 whitespace-nowrap sticky left-0 z-10 bg-white dark:bg-gray-900 shadow-[1px_0_0_#E5E7EB] dark:shadow-[1px_0_0_#1F2937]">{row.name}</td>
+
+                  {/* Start */}
                   <td className={`p-0 border-r border-gray-200 bg-blue-50/20 dark:bg-blue-50/5 ${isCellActive(idx, 'starting') ? 'ring-2 ring-inset ring-blue-500' : ''}`}>
                     <input type="text" inputMode="none" readOnly data-row={idx} data-field="starting"
                       onKeyDown={(e) => handleTableKeyDown(e, idx, 'starting')}
                       onFocus={() => handleCellFocus(row.name, 'starting', inventory[row.name]?.starting, idx)}
                       onBlur={handleCellBlur}
                       value={cellValue(row.name, 'starting', inventory[row.name]?.starting, idx)}
-                      onChange={() => {}}
+                      onChange={() => { }}
                       className="w-full h-full p-2 text-center bg-transparent dark:text-white focus:bg-white dark:focus:bg-gray-800 focus:outline-none cursor-pointer caret-transparent"
                       placeholder="0" />
                   </td>
+
+                  {/* In */}
                   <td className={`p-0 border-r border-gray-200 bg-blue-50/20 dark:bg-blue-50/5 ${isCellActive(idx, 'deliver') ? 'ring-2 ring-inset ring-blue-500' : ''}`}>
                     <input type="text" inputMode="none" readOnly data-row={idx} data-field="deliver"
                       onKeyDown={(e) => handleTableKeyDown(e, idx, 'deliver')}
                       onFocus={() => handleCellFocus(row.name, 'deliver', inventory[row.name]?.deliver, idx)}
                       onBlur={handleCellBlur}
                       value={cellValue(row.name, 'deliver', inventory[row.name]?.deliver, idx)}
-                      onChange={() => {}}
+                      onChange={() => { }}
                       className="w-full h-full p-2 text-center bg-transparent dark:text-white focus:bg-white dark:focus:bg-gray-800 focus:outline-none cursor-pointer caret-transparent"
                       placeholder="0" />
                   </td>
-                  <td className={`p-0 border-r border-gray-200 bg-red-50/20 dark:bg-red-50/5 ${isCellActive(idx, 'waste') ? 'ring-2 ring-inset ring-red-500' : ''}`}>
-                    <input type="text" inputMode="none" readOnly data-row={idx} data-field="waste"
-                      onKeyDown={(e) => handleTableKeyDown(e, idx, 'waste')}
-                      onFocus={() => handleCellFocus(row.name, 'waste', inventory[row.name]?.waste, idx)}
-                      onBlur={handleCellBlur}
-                      value={cellValue(row.name, 'waste', inventory[row.name]?.waste, idx)}
-                      onChange={() => {}}
-                      className="w-full h-full p-2 text-center bg-transparent focus:bg-white dark:focus:bg-gray-800 focus:outline-none cursor-pointer caret-transparent text-red-600 dark:text-red-400"
-                      placeholder="0" />
-                  </td>
-                  <td className={`p-0 border-r border-gray-200 bg-green-50/20 dark:bg-green-50/5 ${isCellActive(idx, 'endingOverride') ? 'ring-2 ring-inset ring-green-500' : ''}`}>
-                    <input type="text" inputMode="none" readOnly data-row={idx} data-field="endingOverride"
-                      onKeyDown={(e) => handleTableKeyDown(e, idx, 'endingOverride')}
-                      onFocus={() => handleCellFocus(row.name, 'endingOverride', inventory[row.name]?.endingOverride, idx)}
-                      onBlur={handleCellBlur}
-                      value={cellValue(row.name, 'endingOverride', inventory[row.name]?.endingOverride, idx)}
-                      onChange={() => {}}
-                      className={`w-full h-full p-2 text-center bg-transparent focus:bg-white dark:focus:bg-gray-800 focus:outline-none cursor-pointer caret-transparent font-extrabold transition-colors ${row.hasOverride ? 'text-purple-600 dark:text-purple-400' : 'text-green-700 dark:text-green-600'}`}
-                      placeholder={row.theoreticalEnding} />
-                  </td>
-                  <td className={`p-2 border-r border-gray-200 text-center font-bold bg-gray-50 dark:bg-gray-800/40 transition-colors ${row.missingQty !== 0 ? 'text-purple-600 dark:text-purple-400' : 'text-blue-600 dark:text-blue-400'}`}>{row.finalSold}</td>
-                  <td className="p-2 border-r border-gray-200 dark:border-gray-700 text-right text-gray-500 dark:text-gray-400">{row.price}</td>
-                  <td className="p-2 text-right font-bold text-gray-800 dark:text-gray-200 bg-gray-50 dark:bg-gray-800">₱{row.sales}</td>
+
+                  {/* Waste (Conditional) */}
+                  {storeConfig.business?.hasWasteColumn !== false && (
+                    <td className={`p-0 border-r border-gray-200 bg-red-50/20 dark:bg-red-50/5 ${isCellActive(idx, 'waste') ? 'ring-2 ring-inset ring-red-500' : ''}`}>
+                      <input type="text" inputMode="none" readOnly data-row={idx} data-field="waste"
+                        onKeyDown={(e) => handleTableKeyDown(e, idx, 'waste')}
+                        onFocus={() => handleCellFocus(row.name, 'waste', inventory[row.name]?.waste, idx)}
+                        onBlur={handleCellBlur}
+                        value={cellValue(row.name, 'waste', inventory[row.name]?.waste, idx)}
+                        onChange={() => { }}
+                        className="w-full h-full p-2 text-center bg-transparent focus:bg-white dark:focus:bg-gray-800 focus:outline-none cursor-pointer caret-transparent text-red-600 dark:text-red-400 font-bold"
+                        placeholder="0" />
+                    </td>
+                  )}
+
+                  {/* Sold */}
+                  <td className="p-2 border-r border-gray-200 text-center font-bold text-gray-600 dark:text-gray-400">{row.finalSold}</td>
+
+                  {/* Theo. End */}
+                  <td className="p-2 border-r border-gray-200 text-center font-black text-blue-600 dark:text-blue-400 bg-blue-50/30">{row.theoreticalEnding}</td>
+
+                  {/* Reconciliation Columns (Conditional) */}
+                  {storeConfig.business?.hasEndingReconciliation !== false && (
+                    <>
+                      <td className={`p-0 border-r border-gray-200 bg-purple-50/10 ${isCellActive(idx, 'endingOverride') ? 'ring-2 ring-inset ring-purple-500' : ''}`}>
+                        <input type="text" inputMode="none" readOnly data-row={idx} data-field="endingOverride"
+                          onKeyDown={(e) => handleTableKeyDown(e, idx, 'endingOverride')}
+                          onFocus={() => handleCellFocus(row.name, 'endingOverride', inventory[row.name]?.endingOverride, idx)}
+                          onBlur={handleCellBlur}
+                          value={cellValue(row.name, 'endingOverride', inventory[row.name]?.endingOverride, idx)}
+                          onChange={() => { }}
+                          className={`w-full h-full p-2 text-center bg-transparent focus:bg-white dark:focus:bg-gray-800 focus:outline-none cursor-pointer caret-transparent font-extrabold transition-colors ${row.hasOverride ? 'text-purple-600 dark:text-purple-400' : 'text-gray-400'}`}
+                          placeholder={row.theoreticalEnding} />
+                      </td>
+                      <td className={`p-2 border-r border-gray-200 text-center font-black ${row.missingQty > 0 ? 'text-red-500' : row.missingQty < 0 ? 'text-blue-500' : 'text-gray-300 dark:text-gray-600'}`}>
+                        {row.missingQty !== 0 ? (row.missingQty > 0 ? `-${row.missingQty}` : `+${Math.abs(row.missingQty)}`) : '-'}
+                      </td>
+                    </>
+                  )}
+
+                  <td className="p-2 text-right font-black text-green-600 dark:text-green-400 bg-green-50/10">₱{row.sales}</td>
                 </tr>
               ))}
             </tbody>
@@ -703,7 +1338,7 @@ function ReportModal({
         {/* Shift Remarks Review */}
         <div className="p-3 sm:p-4 bg-gray-50 dark:bg-gray-800/50 border-t dark:border-gray-700 shrink-0">
           <label className="block text-xs font-bold text-gray-600 dark:text-gray-400 mb-2 uppercase tracking-wider">Review Current Shift Remarks</label>
-          
+
           <div className="max-h-24 overflow-y-auto mb-3 space-y-1.5 custom-scrollbar border border-gray-200 dark:border-gray-700 rounded-xl p-2 bg-white dark:bg-gray-900">
             {(!shiftRemarks || shiftRemarks.length === 0) ? (
               <p className="text-xs text-gray-400 italic font-medium text-center py-2">No remarks logged during this shift.</p>
@@ -718,10 +1353,10 @@ function ReportModal({
           </div>
 
           <div className="flex gap-2">
-            <input 
-              type="text" 
+            <input
+              type="text"
               id="finalRemarkInput"
-              placeholder="Add a final closing note before saving..." 
+              placeholder="Add a final closing note before saving..."
               className="flex-1 text-sm p-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 focus:border-red-400 focus:ring-4 focus:ring-red-400/20 outline-none transition-all"
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && e.target.value.trim()) {
@@ -731,7 +1366,7 @@ function ReportModal({
                 }
               }}
             />
-            <button 
+            <button
               onClick={(e) => {
                 e.preventDefault();
                 const input = document.getElementById('finalRemarkInput');
@@ -772,19 +1407,19 @@ function ReportModal({
                   onMouseDown={(e) => { e.preventDefault(); onKeypadPress(key); }}
                   className={`
                     py-4 rounded-xl font-black text-lg transition-all active:scale-90 select-none touch-manipulation
-                    ${ key === '↵'
-                        ? 'bg-green-500 hover:bg-green-400 text-white border-b-4 border-green-700'
+                    ${key === '↵'
+                      ? 'bg-green-500 hover:bg-green-400 text-white border-b-4 border-green-700'
                       : key === 'C'
                         ? 'bg-red-600 hover:bg-red-500 text-white border-b-4 border-red-800'
-                      : key === '⌫'
-                        ? 'bg-orange-500 hover:bg-orange-400 text-white border-b-4 border-orange-700'
-                      : ['+', '-', '*', '/'].includes(key)
-                        ? 'bg-blue-600 hover:bg-blue-500 text-white border-b-4 border-blue-800'
-                      : ['(', ')'].includes(key)
-                        ? 'bg-purple-600 hover:bg-purple-500 text-white border-b-4 border-purple-800'
-                      : key === '.'
-                        ? 'bg-gray-600 hover:bg-gray-500 text-white border-b-4 border-gray-800'
-                        : 'bg-gray-700 hover:bg-gray-600 text-gray-100 border-b-4 border-gray-900'
+                        : key === '⌫'
+                          ? 'bg-orange-500 hover:bg-orange-400 text-white border-b-4 border-orange-700'
+                          : ['+', '-', '*', '/'].includes(key)
+                            ? 'bg-blue-600 hover:bg-blue-500 text-white border-b-4 border-blue-800'
+                            : ['(', ')'].includes(key)
+                              ? 'bg-purple-600 hover:bg-purple-500 text-white border-b-4 border-purple-800'
+                              : key === '.'
+                                ? 'bg-gray-600 hover:bg-gray-500 text-white border-b-4 border-gray-800'
+                                : 'bg-gray-700 hover:bg-gray-600 text-gray-100 border-b-4 border-gray-900'
                     }
                   `}
                 >
@@ -810,6 +1445,10 @@ function POSApp({ shopId, userRole, memberships, user, onSwitchShop, onLogout })
   const [hasLocalActiveShift, setHasLocalActiveShift] = useState(false);
   const [setupLoading, setSetupLoading] = useState(true);
 
+  // --- WAKE UP ROUTINE (Step 2) ---
+  useWakeUpRoutine(onLogout);
+
+
   // --- CORE APP STATE ---
   const [time, setTime] = useState(new Date());
   const [config, setConfig] = useState(() => {
@@ -831,11 +1470,31 @@ function POSApp({ shopId, userRole, memberships, user, onSwitchShop, onLogout })
   const [shiftRemarks, setShiftRemarks] = useState([]); // Now an array of log objects
   const [pastRemarks, setPastRemarks] = useState([]); // Fetched from the shop document
   const [showShopInfo, setShowShopInfo] = useState(false); // Replaces showCodeModal
+  const [stagingBlueprint, setStagingBlueprint] = useState(null); // Holds the blueprint before it's finalized
 
   // --- UI STATE ---
   const [isAddMode, setIsAddMode] = useState(true);
   const [showReport, setShowReport] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const handleExitToShopSelector = async () => {
+    // 1. Slam the door shut. Stop all background syncing immediately.
+    await disableNetwork(db);
+
+    // 2. Clear the active shop in App state (onSwitchShop sets selectedShopId to null)
+    onSwitchShop();
+    
+    // 3. Clear from localStorage so it doesn't auto-load on refresh
+    localStorage.removeItem('active_shop_id');
+    localStorage.removeItem('active_shop_name');
+
+    // 4. Turn the network back on so the Hub can fetch the master shop list
+    await enableNetwork(db);
+    
+    // 5. Hide modals
+    setShowSettings(false);
+    setShowShopInfo(false);
+  };
+
   const [showCodeModal, setShowCodeModal] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
@@ -849,6 +1508,28 @@ function POSApp({ shopId, userRole, memberships, user, onSwitchShop, onLogout })
   const [settingsTab, setSettingsTab] = useState('general');
   const [selectedRecipeItem, setSelectedRecipeItem] = useState(null);
   const [lastActiveCell, setLastActiveCell] = useState({ rowIdx: 0, field: 'starting' });
+  const [inviteCode, setInviteCode] = useState('Loading...');
+
+  // Fetch the already established 6-character invite code
+  useEffect(() => {
+    if (settingsTab === 'team') {
+      const fetchCode = async () => {
+        try {
+          const shopRef = doc(db, 'shops', shopId);
+          const shopSnap = await getDoc(shopRef);
+          if (shopSnap.exists() && shopSnap.data().joinCode) {
+            setInviteCode(shopSnap.data().joinCode);
+          } else {
+            setInviteCode('NO_CODE_FOUND');
+          }
+        } catch (err) {
+          console.error("Error fetching invite code", err);
+          setInviteCode('ERROR');
+        }
+      };
+      fetchCode();
+    }
+  }, [settingsTab, shopId, db]);
 
   // --- SCROLL STATE ---
   const ordersEndRef = React.useRef(null);
@@ -918,17 +1599,27 @@ function POSApp({ shopId, userRole, memberships, user, onSwitchShop, onLogout })
       const names = {};
       for (const sid of Object.keys(memberships)) {
         try {
-          const snap = await getDoc(doc(db, 'shops', sid));
-          if (snap.exists()) {
-            names[sid] = snap.data().name;
-            if (sid === shopId) setShopCode(snap.data().joinCode || null);
+          const shopRef = doc(db, 'shops', sid);
+          // Force the query to hit the local cache first.
+          let snap = await getDoc(shopRef, { source: 'cache' });
+          
+          if (!snap.exists()) {
+             // Fallback to server if not in cache
+             snap = await getDoc(shopRef, { source: 'server' });
           }
-        } catch (_) {}
+
+          if (snap.exists()) {
+            const data = snap.data();
+            names[sid] = data.name;
+            if (sid === shopId) setShopCode(data.joinCode || null);
+          }
+        } catch (_) { }
       }
       setShopNames(names);
     };
     fetchNames();
   }, [memberships, shopId]);
+
 
   // ==========================================================================
   // PHASE 4: INITIALIZATION HOOK — runs on mount / shopId change
@@ -941,8 +1632,13 @@ function POSApp({ shopId, userRole, memberships, user, onSwitchShop, onLogout })
       setHasLocalActiveShift(!!localRaw);
       // 2. Fetch the most recent Firestore shift report & shop details
       try {
-        // Fetch past remarks from the shop document
-        const shopSnap = await getDoc(doc(db, 'shops', shopId));
+        // Fetch past remarks from the shop document (Cache-First)
+        const shopRef = doc(db, 'shops', shopId);
+        let shopSnap = await getDoc(shopRef, { source: 'cache' });
+        if (!shopSnap.exists()) {
+          shopSnap = await getDoc(shopRef, { source: 'server' });
+        }
+        
         if (shopSnap.exists()) {
           setPastRemarks(shopSnap.data().recentRemarks || []);
         }
@@ -952,13 +1648,64 @@ function POSApp({ shopId, userRole, memberships, user, onSwitchShop, onLogout })
           orderBy('timestamp', 'desc'),
           limit(1)
         );
-        const snap = await getDocs(q);
-        if (!snap.empty) setLastReport(snap.docs[0].data());
+        // Note: query with 'cache' source is not directly supported by getDocs in the same way,
+        // but Firestore cache will be used automatically if persistence is enabled.
+        const reportSnap = await getDocs(q);
+        if (!reportSnap.empty) setLastReport(reportSnap.docs[0].data());
         else setLastReport(null);
+
       } catch (err) {
         console.warn('Could not fetch last report:', err.message);
         setLastReport(null);
       }
+
+      // 3. Fetch Store Schema (With Franchise Link Support) - Cache-First
+      try {
+        const localSchema = JSON.parse(localStorage.getItem(`pos_storeConfig_${shopId}`));
+        if (localSchema && !localSchema.isLinked) {
+          setStoreConfig(localSchema);
+        } else {
+          // Check the local shop's schema config document
+          const schemaRef = doc(db, 'shops', shopId, 'config', 'schema');
+          let schemaSnap = await getDoc(schemaRef, { source: 'cache' });
+          if (!schemaSnap.exists()) {
+            schemaSnap = await getDoc(schemaRef, { source: 'server' });
+          }
+
+          if (schemaSnap.exists()) {
+            const configData = schemaSnap.data();
+
+            // TRUE FRANCHISE LOGIC: If linked, fetch the Master schema instead
+            if (configData.isLinked && configData.sourceShopId) {
+              const masterRef = doc(db, 'shops', configData.sourceShopId, 'config', 'schema');
+              let masterSnap = await getDoc(masterRef, { source: 'cache' });
+              if (!masterSnap.exists()) {
+                masterSnap = await getDoc(masterRef, { source: 'server' });
+              }
+
+              if (masterSnap.exists()) {
+                const masterData = masterSnap.data();
+                // Inject the master data, but preserve the local branch's link flags!
+                const linkedConfig = { ...masterData, isLinked: true, sourceShopId: configData.sourceShopId };
+                setStoreConfig(linkedConfig);
+                localStorage.setItem(`pos_storeConfig_${shopId}`, JSON.stringify(linkedConfig));
+              } else {
+                console.error("Master branch schema missing. Breaking link.");
+                setStoreConfig({ ...configData, isLinked: false, sourceShopId: null });
+              }
+            } else {
+              // Normal Unlinked Boot
+              setStoreConfig(configData);
+              localStorage.setItem(`pos_storeConfig_${shopId}`, JSON.stringify(configData));
+            }
+          } else {
+            setStoreConfig(null); // No schema exists, trigger Setup Wizard
+          }
+        }
+      } catch (err) {
+        console.error("Failed to fetch schema:", err);
+      }
+
       setSetupLoading(false);
     };
     initShift();
@@ -1097,7 +1844,7 @@ function POSApp({ shopId, userRole, memberships, user, onSwitchShop, onLogout })
   };
 
   const handleToggleOrderStatus = (orderId, field) => {
-    setOrders(prev => prev.map(o => 
+    setOrders(prev => prev.map(o =>
       o.id === orderId ? { ...o, [field]: !o[field] } : o
     ));
   };
@@ -1106,7 +1853,7 @@ function POSApp({ shopId, userRole, memberships, user, onSwitchShop, onLogout })
   // LOGIC: INVENTORY / MANUAL COUNT
   // ==========================================================================
   const handleInventoryInput = (ingredient, field, value) => {
-    const numValue = value === '' ? '' : parseInt(value) || 0;
+    const numValue = value === '' ? '' : parseFloat(value) || 0;
     setInventory(prev => ({ ...prev, [ingredient]: { ...(prev[ingredient] || { starting: '', deliver: '', waste: '' }), [field]: numValue } }));
   };
 
@@ -1139,6 +1886,24 @@ function POSApp({ shopId, userRole, memberships, user, onSwitchShop, onLogout })
   // ==========================================================================
   // PHASE 4: END OF SHIFT — compile report, push to Firestore, reset device
   // ==========================================================================
+  // Phase 6: Save the finalized schema to Firestore so staff can sync it
+  const handleFinalizeSchema = async (finalSchema) => {
+    try {
+      setToast('Saving schema to cloud...');
+
+      // 1. Save to a dedicated config document in Firestore
+      await setDoc(doc(db, 'shops', shopId, 'config', 'schema'), finalSchema);
+
+      // 2. Set it locally to boot up the POS
+      setStoreConfig(finalSchema);
+      setStagingBlueprint(null);
+      setToast('Store initialized successfully!');
+    } catch (err) {
+      console.error("Schema save error:", err);
+      setToast('Failed to save schema to cloud. Check permissions.');
+    }
+  };
+
   const handleEndShift = async () => {
     if (!window.confirm('End Shift & Save Report? This will push data to the cloud and reset this device.')) return;
     setToast('Saving report to cloud...');
@@ -1146,10 +1911,10 @@ function POSApp({ shopId, userRole, memberships, user, onSwitchShop, onLogout })
       const inventorySnapshot = {};
       spreadsheetData.rows.forEach(row => {
         inventorySnapshot[row.name] = {
-          start:       row.start,
-          deliver:     row.deliver,
-          waste:       row.waste,
-          sold:        row.finalSold,
+          start: row.start,
+          deliver: row.deliver,
+          waste: row.waste,
+          sold: row.finalSold,
           finalEnding: row.finalEnding,
         };
       });
@@ -1160,10 +1925,10 @@ function POSApp({ shopId, userRole, memberships, user, onSwitchShop, onLogout })
         inventorySnapshot,
         remarks: shiftRemarks, // Attach the raw array to the specific report backup
       };
-      
+
       // 1. Save the Shift Report to the subcollection
       const reportRef = await addDoc(collection(db, 'shops', shopId, 'shift_reports'), shift_report);
-      
+
       // 2. Create a Summary Object for the Rolling Logbook (Only if there are remarks)
       if (shiftRemarks && shiftRemarks.length > 0) {
         const shiftSummary = {
@@ -1172,7 +1937,7 @@ function POSApp({ shopId, userRole, memberships, user, onSwitchShop, onLogout })
           author: user.displayName || user.email,
           messages: shiftRemarks
         };
-        
+
         const combinedRemarks = [shiftSummary, ...pastRemarks].slice(0, 20); // Keep last 20 shifts
         await updateDoc(doc(db, 'shops', shopId), { recentRemarks: combinedRemarks });
       }
@@ -1246,7 +2011,7 @@ function POSApp({ shopId, userRole, memberships, user, onSwitchShop, onLogout })
     if (!text) { setToast('Data is empty!'); return; }
     const rowsRaw = text.split(/\r?\n/).filter(r => r.trim() !== '');
     if (rowsRaw.length === 0) { setToast('No detectable data.'); return; }
-    const parseVal = (val) => { if (!val || val.trim() === '') return ''; const num = parseInt(val.replace(/,/g, ''), 10); return isNaN(num) ? '' : num; };
+    const parseVal = (val) => { if (!val || val.trim() === '') return ''; const num = parseFloat(val.replace(/,/g, '')); return isNaN(num) ? '' : num; };
     setInventory(prev => {
       const nextInv = { ...prev };
       rowsRaw.forEach((rowRaw, rOffset) => {
@@ -1276,7 +2041,7 @@ function POSApp({ shopId, userRole, memberships, user, onSwitchShop, onLogout })
   const handleTablePaste = (e, rowIdx, field) => {
     e.preventDefault();
     const rowsRaw = e.clipboardData.getData('text').split(/\r?\n/).filter(r => r.trim() !== '');
-    const parseVal = (val) => { if (!val || val.trim() === '') return ''; const num = parseInt(val.replace(/,/g, ''), 10); return isNaN(num) ? '' : num; };
+    const parseVal = (val) => { if (!val || val.trim() === '') return ''; const num = parseFloat(val.replace(/,/g, '')); return isNaN(num) ? '' : num; };
     setInventory(prev => {
       const nextInv = { ...prev };
       rowsRaw.forEach((rowRaw, rOffset) => {
@@ -1297,13 +2062,9 @@ function POSApp({ shopId, userRole, memberships, user, onSwitchShop, onLogout })
   // PHASE 4: BLOCKING RENDERS — loading spinner & shift setup screen
   // ==========================================================================
   if (setupLoading) {
-    return (
-      <div className="h-[100dvh] w-full flex flex-col items-center justify-center bg-gray-950">
-        <Loader2 size={40} className="text-red-500 animate-spin" />
-        <p className="text-gray-600 font-bold text-xs uppercase tracking-widest mt-3">Loading shift data...</p>
-      </div>
-    );
+    return <InitialLoader onTimeoutExit={handleExitToShopSelector} />;
   }
+
 
   if (!shiftStarted) {
     return (
@@ -1337,7 +2098,7 @@ function POSApp({ shopId, userRole, memberships, user, onSwitchShop, onLogout })
                           // SAFELY HYDRATE ARRAYS TO PREVENT TEXT CORRUPTION:
                           setShiftRemarks(Array.isArray(data.shiftRemarks) ? data.shiftRemarks : []);
                         }
-                      } catch (_) {}
+                      } catch (_) { }
                       setShiftStarted(true);
                     }}
                     className="w-full py-4 bg-yellow-500 hover:bg-yellow-600 text-white font-black rounded-xl shadow-lg transition-all active:scale-95 border-b-4 border-yellow-700 uppercase tracking-widest text-sm"
@@ -1438,10 +2199,46 @@ function POSApp({ shopId, userRole, memberships, user, onSwitchShop, onLogout })
   }
 
   // ==========================================================================
-  // RENDER: NO STORE CONFIG LOADED
+  // RENDER ROUTING: SCHEMA BUILDER & ONBOARDING
   // ==========================================================================
+
+  // 1. If stagingBlueprint exists, ALWAYS render the Builder (This allows editing existing schemas)
+  if (stagingBlueprint) {
+    return (
+      <SchemaBuilder
+        blueprint={stagingBlueprint}
+        onSave={handleFinalizeSchema}
+        onCancel={() => setStagingBlueprint(null)}
+      />
+    );
+  }
+
+  // 2. If no config exists, route through the Wizard or wait for Owner
   if (!storeConfig) {
-    return <FallbackScreen onLoadTemplate={() => setStoreConfig(angelsBurgerTemplate)} />;
+    if (userRole === 'owner') {
+      return (
+        <StoreSetupWizard
+          db={db}
+          shopNames={shopNames}
+          currentShopId={shopId}
+          onSelectBlueprint={(blueprint) => setStagingBlueprint(blueprint)}
+          onSaveDirect={handleFinalizeSchema} // Allows Linked mode to bypass Builder
+        />
+      );
+    } else {
+      return (
+        <div className="h-[100dvh] flex flex-col items-center justify-center bg-gray-100 dark:bg-gray-950 font-sans text-center p-4">
+          <div className="bg-white dark:bg-gray-900 p-8 rounded-3xl shadow-xl flex flex-col items-center gap-4 border border-gray-200 dark:border-gray-800 max-w-sm">
+            <Loader2 size={40} className="text-blue-500 animate-spin" />
+            <div>
+              <h2 className="text-lg font-black text-gray-800 dark:text-gray-100 uppercase tracking-widest">Awaiting Schema</h2>
+              <p className="text-sm text-gray-500 font-bold mt-2 leading-relaxed">The shop owner has not initialized the store configuration yet. Please ask the owner to log in and configure the store.</p>
+            </div>
+            <button onClick={onLogout} className="mt-4 px-6 py-2 bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 font-bold rounded-xl hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors text-xs">Sign Out</button>
+          </div>
+        </div>
+      );
+    }
   }
 
   // ==========================================================================
@@ -1451,6 +2248,7 @@ function POSApp({ shopId, userRole, memberships, user, onSwitchShop, onLogout })
     <div className="flex flex-col sm:flex-row h-[100dvh] bg-gray-100 dark:bg-gray-900 font-sans overflow-hidden transition-colors" style={{ zoom: config.scale || 1 }}>
 
       <OrderFeed
+        shopName={shopNames?.[shopId]}
         storeConfig={storeConfig} orders={orders} activeOrderId={activeOrderId}
         setActiveOrderId={setActiveOrderId} spreadsheetData={spreadsheetData}
         createNewOrder={createNewOrder} time={time} config={config}
@@ -1478,13 +2276,39 @@ function POSApp({ shopId, userRole, memberships, user, onSwitchShop, onLogout })
       {showShopInfo && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4 sm:p-6" onClick={() => setShowShopInfo(false)}>
           <div className="bg-white dark:bg-gray-900 rounded-3xl shadow-2xl w-full max-w-lg flex flex-col max-h-[90vh] overflow-hidden" onClick={e => e.stopPropagation()}>
-            
+
             {/* Header: Shop Details */}
-            <div className="bg-gray-900 p-6 text-white flex flex-col items-center border-b-4 border-blue-500 relative shrink-0">
-              <button onClick={() => setShowShopInfo(false)} className="absolute top-4 right-4 p-1 hover:bg-gray-800 rounded-full transition-colors text-gray-400 hover:text-white"><X size={20} /></button>
-              <Store size={32} className="text-blue-400 mb-2" />
-              <h2 className="text-2xl font-black uppercase tracking-tight">{shopNames?.[shopId] || 'Shop Info'}</h2>
-              <div className="flex gap-4 mt-4 bg-gray-800 p-3 rounded-2xl border border-gray-700 w-full justify-center text-center shadow-inner">
+            <div className="bg-gray-900 p-6 text-white border-b-4 border-blue-500 relative shrink-0">
+              <button 
+                onClick={() => setShowShopInfo(false)} 
+                className="absolute top-4 right-4 p-1 hover:bg-gray-800 rounded-full transition-colors text-gray-400 hover:text-white"
+              >
+                <X size={20} />
+              </button>
+
+              <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
+                <div className="flex gap-4 items-center">
+                  <div className="bg-blue-600 p-3 rounded-2xl shadow-lg shrink-0">
+                    <Store size={24} className="text-white" />
+                  </div>
+                  <div>
+                    <h2 className="text-xl sm:text-2xl font-black uppercase tracking-tight line-clamp-1">{shopNames?.[shopId] || 'Shop Info'}</h2>
+                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></span> Active Session
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  onClick={handleExitToShopSelector}
+                  className="flex items-center justify-center gap-2 px-4 py-2 bg-gray-800 hover:bg-orange-500/10 text-gray-400 hover:text-orange-400 transition-all rounded-xl border border-gray-700 hover:border-orange-500/30 font-black text-[10px] uppercase tracking-widest shrink-0"
+                >
+                  <ArrowLeftRight size={14} />
+                  Switch Shop
+                </button>
+              </div>
+
+              <div className="flex gap-3 sm:gap-4 mt-6 bg-gray-800/50 p-3 rounded-2xl border border-gray-700 w-full justify-center text-center shadow-inner">
                 <div>
                   <p className="text-[9px] font-bold text-gray-400 uppercase tracking-widest">Join Code</p>
                   <p className="font-mono text-xl font-black text-yellow-400 tracking-widest">{shopCode}</p>
@@ -1499,7 +2323,7 @@ function POSApp({ shopId, userRole, memberships, user, onSwitchShop, onLogout })
 
             {/* Logbook Feed */}
             <div className="flex-1 overflow-y-auto p-4 bg-gray-50 dark:bg-gray-950 space-y-4 custom-scrollbar">
-              
+
               {/* CURRENT SHIFT NOTES (Live) */}
               <div className="bg-blue-50 dark:bg-blue-900/10 border-2 border-blue-200 dark:border-blue-800 p-3 rounded-2xl">
                 <p className="text-[10px] font-black text-blue-600 dark:text-blue-400 uppercase tracking-widest mb-2 flex items-center gap-1">
@@ -1523,9 +2347,9 @@ function POSApp({ shopId, userRole, memberships, user, onSwitchShop, onLogout })
 
               {/* PAST SHIFT LOGS */}
               <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest text-center mt-4 border-b dark:border-gray-800 pb-2">Past Shifts</p>
-              
+
               {pastRemarks.length === 0 && <p className="text-xs text-center text-gray-500 italic">No past logs available.</p>}
-              
+
               {pastRemarks.map((shiftLog, index) => (
                 <div key={index} className="bg-white dark:bg-gray-800 p-3 rounded-2xl border border-gray-200 dark:border-gray-700 shadow-sm">
                   <div className="flex justify-between items-center mb-2 border-b dark:border-gray-700 pb-1">
@@ -1550,10 +2374,10 @@ function POSApp({ shopId, userRole, memberships, user, onSwitchShop, onLogout })
 
             {/* Input Area */}
             <div className="p-4 bg-white dark:bg-gray-900 border-t dark:border-gray-800 flex gap-2 shrink-0">
-              <input 
+              <input
                 id="logInput"
-                type="text" 
-                placeholder="Type a note for this shift..." 
+                type="text"
+                placeholder="Type a note for this shift..."
                 className="flex-1 bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl px-4 py-3 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-blue-500 dark:text-white"
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && e.target.value.trim() !== '') {
@@ -1563,7 +2387,7 @@ function POSApp({ shopId, userRole, memberships, user, onSwitchShop, onLogout })
                   }
                 }}
               />
-              <button 
+              <button
                 onClick={() => {
                   const input = document.getElementById('logInput');
                   if (input && input.value.trim() !== '') {
@@ -1592,16 +2416,18 @@ function POSApp({ shopId, userRole, memberships, user, onSwitchShop, onLogout })
               <button onClick={() => setShowSettings(false)} className="p-1.5 hover:bg-gray-800 rounded-full transition-colors"><X size={20} /></button>
             </div>
 
-            {/* Tab Bar — grid prevents scrolling regardless of screen width */}
-            <div className="grid grid-cols-4 border-b dark:border-gray-800 shrink-0">
-              {['general', 'prices', 'recipes', 'account'].map(tab => (
-                <button key={tab} onClick={() => setSettingsTab(tab)}
-                  className={`py-3 text-[10px] sm:text-xs font-bold transition-colors capitalize ${
-                    settingsTab === tab
-                      ? 'text-blue-600 border-b-2 border-blue-600 bg-blue-50 dark:bg-blue-900/20'
-                      : 'text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800'
-                  }`}>
-                  {tab === 'general' ? 'General' : tab === 'prices' ? 'Prices' : tab === 'recipes' ? 'Recipes' : 'Account'}
+            <div className="flex border-b border-gray-200 dark:border-gray-800 shrink-0">
+              {[
+                { id: 'general', label: 'General' },
+                { id: 'team', label: 'Team & Access' },
+                { id: 'account', label: 'My Account' }
+              ].map(t => (
+                <button
+                  key={t.id}
+                  onClick={() => setSettingsTab(t.id)}
+                  className={`flex-1 py-3 text-[10px] sm:text-xs font-black uppercase tracking-widest transition-colors ${settingsTab === t.id ? 'text-blue-600 border-b-2 border-blue-600 dark:text-blue-400 dark:border-blue-400' : 'text-gray-500 hover:text-gray-800 dark:hover:text-gray-300'}`}
+                >
+                  {t.label}
                 </button>
               ))}
             </div>
@@ -1616,11 +2442,10 @@ function POSApp({ shopId, userRole, memberships, user, onSwitchShop, onLogout })
                     <div className="flex gap-2">
                       {['12h', '24h'].map(fmt => (
                         <button key={fmt} onClick={() => setConfig(p => ({ ...p, timeFormat: fmt }))}
-                          className={`flex-1 py-2 rounded-lg font-bold border-2 transition-all flex items-center justify-center gap-2 ${
-                            config.timeFormat === fmt
+                          className={`flex-1 py-2 rounded-lg font-bold border-2 transition-all flex items-center justify-center gap-2 ${config.timeFormat === fmt
                               ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400'
                               : 'border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800'
-                          }`}>
+                            }`}>
                           <Clock size={16} /> {fmt === '12h' ? '12-Hour' : '24-Hour'}
                         </button>
                       ))}
@@ -1630,19 +2455,17 @@ function POSApp({ shopId, userRole, memberships, user, onSwitchShop, onLogout })
                     <h3 className="font-bold text-gray-800 dark:text-gray-200 mb-3 uppercase text-xs tracking-wider">Theme Profile</h3>
                     <div className="flex gap-2">
                       <button onClick={() => setConfig(p => ({ ...p, theme: 'light' }))}
-                        className={`flex-1 py-2 rounded-lg font-bold border-2 transition-all flex items-center justify-center gap-2 ${
-                          config.theme === 'light'
+                        className={`flex-1 py-2 rounded-lg font-bold border-2 transition-all flex items-center justify-center gap-2 ${config.theme === 'light'
                             ? 'border-yellow-500 bg-yellow-50 dark:bg-yellow-900/20 text-yellow-700 dark:text-yellow-400'
                             : 'border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800'
-                        }`}>
+                          }`}>
                         <Sun size={16} /> Light Mode
                       </button>
                       <button onClick={() => setConfig(p => ({ ...p, theme: 'dark' }))}
-                        className={`flex-1 py-2 rounded-lg font-bold border-2 transition-all flex items-center justify-center gap-2 ${
-                          config.theme === 'dark'
+                        className={`flex-1 py-2 rounded-lg font-bold border-2 transition-all flex items-center justify-center gap-2 ${config.theme === 'dark'
                             ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-400'
                             : 'border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800'
-                        }`}>
+                          }`}>
                         <Moon size={16} /> Dark Mode
                       </button>
                     </div>
@@ -1653,11 +2476,10 @@ function POSApp({ shopId, userRole, memberships, user, onSwitchShop, onLogout })
                     <div className="flex gap-2">
                       {[1, 2, 3, 4].map(num => (
                         <button key={num} onClick={() => setConfig(p => ({ ...p, orderGridCols: num }))}
-                          className={`flex-1 py-2 rounded-lg font-bold border-2 transition-all flex items-center justify-center ${
-                            (config.orderGridCols || 2) === num
+                          className={`flex-1 py-2 rounded-lg font-bold border-2 transition-all flex items-center justify-center ${(config.orderGridCols || 2) === num
                               ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400'
                               : 'border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800'
-                          }`}>
+                            }`}>
                           {num}
                         </button>
                       ))}
@@ -1687,163 +2509,223 @@ function POSApp({ shopId, userRole, memberships, user, onSwitchShop, onLogout })
                       {[2, 3, 4, 5, 6].map(num => (
                         <button key={num}
                           onClick={() => setConfig(p => ({ ...p, gridCols: num }))}
-                          className={`flex-1 py-3 rounded-xl font-black text-sm border-2 transition-all flex items-center justify-center ${
-                            (config.gridCols || 3) === num
+                          className={`flex-1 py-3 rounded-xl font-black text-sm border-2 transition-all flex items-center justify-center ${(config.gridCols || 3) === num
                               ? 'border-blue-500 bg-blue-500 text-white shadow-md border-b-4 border-b-blue-700'
                               : 'border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-500 dark:text-gray-400'
-                          }`}>
+                            }`}>
                           {num}
                         </button>
                       ))}
                     </div>
                   </div>
-                </div>
-              )}
+                  {/* Schema Rebuild Button (Owner Only) */}
+                  {userRole === 'owner' && (
+                    <div className="pt-6 mt-6 border-t border-gray-200 dark:border-gray-700">
+                      <h3 className="font-bold text-red-600 dark:text-red-400 mb-3 uppercase text-xs tracking-wider">Danger Zone</h3>
 
-              {/* ── ITEM PRICES TAB ── */}
-              {settingsTab === 'prices' && (
-                <div className="space-y-4">
-                  <p className="text-xs text-gray-500 dark:text-gray-400 font-bold mb-4">Modify prices for the Menu items and Spreadsheet references. Overrides standard values.</p>
-                  <div className="grid sm:grid-cols-2 gap-6">
-                    <div>
-                      <h3 className="font-black border-b pb-1 mb-2 dark:border-gray-700 text-sm text-gray-800 dark:text-gray-200">Menu Items</h3>
-                      {storeConfig.menuItems.filter(i => i.id !== 'custom_amount').map(item => (
-                        <div key={item.id} className="flex justify-between items-center mb-1 bg-gray-50 dark:bg-gray-800 p-1 rounded">
-                          <span className="text-xs font-bold text-gray-800 dark:text-gray-200">{item.name} <span className="text-[9px] text-gray-400 font-normal">({item.price})</span></span>
-                          <input type="number"
-                            className="w-16 bg-white dark:bg-gray-900 border dark:border-gray-700 rounded p-1 text-xs text-right focus:outline-none focus:ring-1 focus:ring-blue-500 dark:text-white"
-                            placeholder={item.price}
-                            value={config.customPrices.menu[item.id] ?? ''}
-                            onChange={(e) => { const val = e.target.value; setConfig(p => { const cp = { ...p.customPrices }; if (val === '') delete cp.menu[item.id]; else cp.menu[item.id] = Number(val); return { ...p, customPrices: cp }; }); }}
-                          />
-                        </div>
-                      ))}
-                    </div>
-                    <div>
-                      <h3 className="font-black border-b pb-1 mb-2 dark:border-gray-700 text-sm text-gray-800 dark:text-gray-200">Spreadsheet Ingredients</h3>
-                      {Object.entries(storeConfig.inventoryDb).map(([name, defaultP]) => (
-                        <div key={name} className="flex justify-between items-center mb-1 bg-gray-50 dark:bg-gray-800 p-1 rounded">
-                          <span className="text-xs font-bold text-gray-800 dark:text-gray-200">{name} <span className="text-[9px] text-gray-400 font-normal">({defaultP})</span></span>
-                          <input type="number"
-                            className="w-16 bg-white dark:bg-gray-900 border dark:border-gray-700 rounded p-1 text-xs text-right focus:outline-none focus:ring-1 focus:ring-blue-500 dark:text-white"
-                            placeholder={defaultP}
-                            value={config.customPrices.ingredients[name] ?? ''}
-                            onChange={(e) => { const val = e.target.value; setConfig(p => { const cp = { ...p.customPrices }; if (val === '') delete cp.ingredients[name]; else cp.ingredients[name] = Number(val); return { ...p, customPrices: cp }; }); }}
-                          />
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* ── RECIPES TAB ── */}
-              {settingsTab === 'recipes' && (
-                <div className="space-y-4">
-                  <p className="text-xs text-gray-500 dark:text-gray-400 font-bold mb-4">Modify the exact ingredients used per item. This affects inventory tracking.</p>
-                  <div className="mb-4">
-                    <select value={selectedRecipeItem || ''} onChange={(e) => setSelectedRecipeItem(e.target.value)}
-                      className="w-full sm:w-1/2 p-2 rounded border bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200 border-gray-300 dark:border-gray-700 outline-none focus:ring-2 focus:ring-blue-500 font-bold text-sm">
-                      {storeConfig.menuItems.map(item => (<option key={item.id} value={item.id}>{item.name}</option>))}
-                    </select>
-                  </div>
-                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                    {Object.keys(storeConfig.inventoryDb).map(ing => {
-                      const baseRecipe = storeConfig.menuItems.find(m => m.id === selectedRecipeItem)?.recipe || {};
-                      const currentRecipe = config.customRecipes?.[selectedRecipeItem] || baseRecipe;
-                      const val = currentRecipe?.[ing] || '';
-                      return (
-                        <div key={ing} className="flex justify-between items-center bg-gray-100 dark:bg-gray-800 p-2 rounded shadow-sm">
-                          <span className="text-xs font-bold truncate max-w-[80px]" title={ing}>{ing}</span>
-                          <input type="number" value={val} placeholder="0"
-                            onChange={(e) => {
-                              const v = e.target.value;
-                              setConfig(p => {
-                                const n = { ...p.customRecipes };
-                                if (!n[selectedRecipeItem]) n[selectedRecipeItem] = { ...baseRecipe };
-                                if (!v || v === '0') delete n[selectedRecipeItem][ing];
-                                else n[selectedRecipeItem][ing] = Number(v);
-                                return { ...p, customRecipes: n };
-                              });
-                            }}
-                            className="w-14 p-1 text-xs text-center border-2 border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 rounded outline-none focus:border-blue-400 dark:focus:border-blue-500 [&::-webkit-inner-spin-button]:appearance-none dark:text-white" />
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-
-              {/* ── ACCOUNT TAB ── */}
-              {settingsTab === 'account' && (
-                <div className="space-y-5">
-                  {/* Profile */}
-                  <div className="flex items-center gap-4 p-4 bg-gray-50 dark:bg-gray-800 rounded-2xl border border-gray-200 dark:border-gray-700">
-                    {user?.photoURL ? (
-                      <img src={user.photoURL} alt="avatar" className="w-14 h-14 rounded-full border-2 border-red-500 shadow-md" />
-                    ) : (
-                      <div className="w-14 h-14 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center border-2 border-red-300">
-                        <UserCircle size={32} className="text-red-500" />
-                      </div>
-                    )}
-                    <div>
-                      <p className="font-black text-gray-900 dark:text-gray-100 text-base">{user?.displayName || 'Unknown User'}</p>
-                      <p className="text-xs text-gray-500 dark:text-gray-400 font-bold">{user?.email}</p>
-                      <span className={`inline-block mt-1 text-[10px] font-black uppercase tracking-widest px-2 py-0.5 rounded-full ${
-                        userRole === 'owner'
-                          ? 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400'
-                          : 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400'
-                      }`}>{userRole}</span>
-                    </div>
-                  </div>
-
-                  {/* Current Shop */}
-                  <div>
-                    <p className="text-[10px] text-gray-400 font-black uppercase tracking-widest mb-2">Current Shop</p>
-                    <div className="flex items-center gap-3 bg-red-50 dark:bg-red-900/10 border border-red-100 dark:border-red-800 rounded-2xl p-3">
-                      <div className="bg-red-600 p-2 rounded-xl">
-                        <Store size={18} className="text-white" />
-                      </div>
-                      <div className="flex-1">
-                        <p className="font-black text-gray-800 dark:text-gray-100 text-sm">{shopNames?.[shopId] || shopId}</p>
-                        <p className="text-[10px] text-gray-400 font-bold">ID: {shopId}</p>
-                      </div>
-                      <span className="w-2.5 h-2.5 rounded-full bg-green-500 animate-pulse" />
-                    </div>
-                  </div>
-
-                  {/* All Memberships */}
-                  {Object.keys(memberships || {}).length > 1 && (
-                    <div>
-                      <p className="text-[10px] text-gray-400 font-black uppercase tracking-widest mb-2">All Shops</p>
-                      <div className="flex flex-col gap-2 max-h-36 overflow-y-auto">
-                        {Object.entries(memberships || {}).map(([sid, role]) => (
-                          <div key={sid} className="flex items-center justify-between bg-gray-50 dark:bg-gray-800 rounded-xl px-3 py-2">
-                            <span className="text-xs font-bold text-gray-700 dark:text-gray-300">{shopNames?.[sid] || sid}</span>
-                            <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-full ${
-                              role === 'owner'
-                                ? 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400'
-                                : 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400'
-                            }`}>{role}</span>
+                      {storeConfig.isLinked ? (
+                        <div className="bg-orange-50 dark:bg-orange-900/20 border border-orange-200 dark:border-orange-800 p-4 rounded-xl">
+                          <p className="text-xs text-orange-800 dark:text-orange-300 font-bold mb-3 flex items-center gap-2">
+                            <span className="text-lg">🔗</span> This store's schema is linked to: <br />
+                            <span className="bg-orange-200 dark:bg-orange-800/80 px-2 py-0.5 rounded text-orange-900 dark:text-orange-100">{shopNames?.[storeConfig.sourceShopId] || 'Master Branch'}</span>
+                          </p>
+                          <div className="flex flex-col gap-2 mt-4">
+                            <button
+                              onClick={() => alert(`To edit the Master Schema, please switch your active shop to "${shopNames?.[storeConfig.sourceShopId] || 'Master Branch'}" from the Main Menu.`)}
+                              className="w-full py-2.5 bg-orange-200 dark:bg-orange-800/50 text-orange-900 dark:text-orange-100 hover:bg-orange-300 dark:hover:bg-orange-700 rounded-lg text-xs font-black transition-colors"
+                            >
+                              Edit Master Branch (Requires Login)
+                            </button>
+                            <button
+                              onClick={() => {
+                                if (window.confirm("Are you sure? This will convert the schema to an Independent Copy. Future changes to the Master branch will no longer affect this store.")) {
+                                  setStagingBlueprint({ ...storeConfig, isLinked: false, sourceShopId: null });
+                                  setShowSettings(false);
+                                }
+                              }}
+                              className="w-full py-2.5 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 hover:border-gray-400 text-gray-700 dark:text-gray-300 rounded-lg text-xs font-black transition-colors shadow-sm"
+                            >
+                              Break Link & Edit Locally
+                            </button>
                           </div>
-                        ))}
-                      </div>
+                        </div>
+                      ) : (
+                        <>
+                          <button
+                            onClick={() => {
+                              setStagingBlueprint(storeConfig);
+                              setShowSettings(false);
+                            }}
+                            className="w-full py-3 bg-white dark:bg-gray-800 text-red-600 dark:text-red-400 font-black rounded-xl border-2 border-red-200 dark:border-red-800 hover:bg-red-50 dark:hover:bg-red-900/20 active:scale-95 transition-all flex items-center justify-center gap-2 shadow-sm"
+                          >
+                            <Settings size={18} /> Edit Store Schema
+                          </button>
+                          <p className="text-[10px] text-gray-400 font-bold text-center mt-2">
+                            Modifying the schema will apply changes to all connected devices on the next shift load.
+                          </p>
+                        </>
+                      )}
                     </div>
                   )}
+                </div>
+              )}
 
-                  {/* Actions */}
-                  <div className="flex flex-col gap-3 pt-2">
+              {/* ========================================== */}
+              {/* TAB: TEAM & ACCESS (OWNER ONLY)            */}
+              {/* ========================================== */}
+              {settingsTab === 'team' && (
+                <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6 custom-scrollbar">
+                  {userRole !== 'owner' ? (
+                    <div className="text-center p-8 text-gray-500 font-bold">
+                      <p>Only the shop owner can manage team access.</p>
+                    </div>
+                  ) : (
+                    <>
+                      <div>
+                        <h2 className="text-sm font-black uppercase tracking-widest text-gray-800 dark:text-gray-200 mb-1">Team Roster</h2>
+                        <p className="text-xs text-gray-500 font-bold mb-4">Users who currently have access to this shop.</p>
+
+                        <div className="space-y-3">
+                          {/* Owner Profile (Cannot kick yourself) */}
+                          <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 p-4 rounded-xl flex justify-between items-center">
+                            <div>
+                              <p className="font-black text-blue-900 dark:text-blue-100">You (Owner)</p>
+                              <p className="text-xs text-blue-600 dark:text-blue-400 font-bold">{user?.email}</p>
+                            </div>
+                            <span className="px-3 py-1 bg-blue-600 text-white text-[10px] font-black uppercase tracking-widest rounded-lg">Owner</span>
+                          </div>
+
+                          {/* Placeholder Staff - In Phase 9, this would map over a teamMembers state array */}
+                          <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 p-4 rounded-xl flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3">
+                            <div>
+                              <p className="font-black text-gray-800 dark:text-gray-200">Staff Member</p>
+                              <p className="text-xs text-gray-500 font-bold">Active membership</p>
+                            </div>
+                            <div className="flex gap-2">
+                              <button
+                                onClick={() => {
+                                  if (window.confirm("Are you sure you want to transfer OWNERSHIP to this user? You will be demoted to Staff.")) {
+                                    alert("Feature coming soon: Requires Cloud Function to update roles safely.");
+                                  }
+                                }}
+                                className="px-3 py-2 bg-gray-100 dark:bg-gray-700 hover:bg-yellow-100 dark:hover:bg-yellow-900/30 text-gray-600 dark:text-gray-300 hover:text-yellow-700 rounded-lg text-[10px] font-black uppercase transition-colors"
+                              >
+                                Transfer
+                              </button>
+                              <button
+                                onClick={() => {
+                                  if (window.confirm("Remove this user's access to the shop?")) {
+                                    alert("Feature coming soon: Backend link removal.");
+                                  }
+                                }}
+                                className="px-3 py-2 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/40 rounded-lg text-[10px] font-black uppercase transition-colors"
+                              >
+                                Kick
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="pt-6 border-t border-gray-200 dark:border-gray-800">
+                        <h3 className="font-bold text-gray-800 dark:text-gray-200 mb-2 uppercase text-xs tracking-wider">Invite Link</h3>
+                        <p className="text-xs text-gray-500 font-bold mb-3">Staff can rejoin or join new devices using this code.</p>
+
+                        <div className="flex gap-2 mb-3">
+                          {/* The Shareable URL */}
+                          <input
+                            readOnly
+                            value={`${window.location.origin}?join=${inviteCode}`}
+                            className="flex-1 p-3 bg-blue-50 dark:bg-blue-900/10 border border-blue-200 dark:border-blue-800 rounded-xl font-mono text-xs sm:text-sm font-bold text-blue-700 dark:text-blue-400 outline-none overflow-hidden text-ellipsis whitespace-nowrap"
+                          />
+                          <button
+                            onClick={() => {
+                              navigator.clipboard.writeText(`${window.location.origin}?join=${inviteCode}`);
+                              alert("Link Copied!");
+                            }}
+                            disabled={inviteCode === 'Loading...' || inviteCode === 'NO_CODE_FOUND'}
+                            className="px-4 bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed text-white font-black rounded-xl hover:bg-blue-700 transition-colors shadow-sm"
+                          >
+                            Copy Link
+                          </button>
+                        </div>
+
+                        {/* Raw 6-character code for manual typing */}
+                        <div className="flex items-center gap-3">
+                          <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Manual Code:</span>
+                          <span className="font-mono text-lg font-black text-gray-800 dark:text-gray-200 tracking-[0.2em]">{inviteCode}</span>
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+
+              {/* ========================================== */}
+              {/* TAB: MY ACCOUNT                            */}
+              {/* ========================================== */}
+              {settingsTab === 'account' && (
+                <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6 custom-scrollbar">
+                  <div>
+                    <h2 className="text-sm font-black uppercase tracking-widest text-gray-800 dark:text-gray-200 mb-1">Profile Details</h2>
+                    <p className="text-xs text-gray-500 font-bold mb-4">Your personal account information.</p>
+
+                    <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 p-4 rounded-xl space-y-3">
+                      <div>
+                        <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Email Address</p>
+                        <p className="font-bold text-gray-800 dark:text-gray-200">{user?.email}</p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Current Role</p>
+                        <span className="inline-block mt-1 px-3 py-1 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 text-[10px] font-black uppercase tracking-widest rounded-lg">
+                          {userRole}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="pt-6 border-t border-gray-200 dark:border-gray-800 flex flex-col gap-3">
                     <button
-                      onClick={() => { setShowSettings(false); onSwitchShop(); }}
-                      className="w-full py-3 bg-gray-100 dark:bg-gray-800 text-gray-800 dark:text-gray-200 font-black rounded-2xl hover:bg-gray-200 dark:hover:bg-gray-700 active:scale-95 transition-all flex items-center justify-center gap-2 border border-gray-200 dark:border-gray-700"
+                      onClick={async () => {
+                        try {
+                          const shopSnap = await getDoc(doc(db, 'shops', shopId));
+                          const schemaSnap = await getDoc(doc(db, 'shops', shopId, 'config', 'schema'));
+                          if (!schemaSnap.exists()) {
+                            alert("No active schema to export.");
+                            return;
+                          }
+                          const sData = shopSnap.data() || {};
+                          const scData = schemaSnap.data();
+                          const cleanSchema = {
+                            name: (sData.name || "My Shop") + " (Imported)",
+                            business: scData.business,
+                            categories: scData.categories,
+                            inventoryDb: scData.inventoryDb,
+                            menuItems: scData.menuItems
+                          };
+                          const blob = new Blob([JSON.stringify(cleanSchema, null, 2)], { type: 'application/json' });
+                          const url = URL.createObjectURL(blob);
+                          const link = document.createElement('a');
+                          link.href = url;
+                          link.download = `biz-schema-${shopId}-${new Date().toISOString().split('T')[0]}.json`;
+                          document.body.appendChild(link);
+                          link.click();
+                          document.body.removeChild(link);
+                          URL.revokeObjectURL(url);
+                        } catch (e) {
+                          console.error(e);
+                          alert("Export failed.");
+                        }
+                      }}
+                      className="w-full py-3 bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 font-black rounded-xl hover:bg-blue-100 dark:hover:bg-blue-900/40 transition-colors shadow-sm flex items-center justify-center gap-2"
                     >
-                      <Store size={16} /> Switch Shop
+                      <Download size={16} /> Export Schema
                     </button>
                     <button
-                      onClick={() => { setShowSettings(false); onLogout(); }}
-                      className="w-full py-3 bg-red-600 hover:bg-red-700 text-white font-black rounded-2xl shadow-lg active:scale-95 transition-all flex items-center justify-center gap-2 border-b-4 border-red-800"
+                      onClick={onLogout}
+                      className="w-full py-3 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 font-black rounded-xl hover:bg-red-100 dark:hover:bg-red-900/40 transition-colors shadow-sm"
                     >
-                      <LogOut size={16} /> Logout
+                      Sign Out
                     </button>
                   </div>
                 </div>
@@ -2005,9 +2887,9 @@ function POSApp({ shopId, userRole, memberships, user, onSwitchShop, onLogout })
             <div className="p-4 grid grid-cols-1 gap-2">
               {[
                 { id: 'xlsx', name: 'Excel Spreadsheet', desc: '.xlsx format for analysis', icon: <FileText className="text-green-600" /> },
-                { id: 'pdf',  name: 'PDF Document',      desc: '.pdf for printing/viewing', icon: <FileText className="text-red-600" /> },
-                { id: 'csv',  name: 'CSV File',          desc: '.csv for lightweight data', icon: <FileText className="text-blue-600" /> },
-                { id: 'json', name: 'System Backup',     desc: '.json for app restoration', icon: <History className="text-purple-600" /> }
+                { id: 'pdf', name: 'PDF Document', desc: '.pdf for printing/viewing', icon: <FileText className="text-red-600" /> },
+                { id: 'csv', name: 'CSV File', desc: '.csv for lightweight data', icon: <FileText className="text-blue-600" /> },
+                { id: 'json', name: 'System Backup', desc: '.json for app restoration', icon: <History className="text-purple-600" /> }
               ].map((opt) => (
                 <button key={opt.id} onClick={() => { exportData(opt.id); setShowExportModal(false); }} className="flex items-center gap-4 p-4 rounded-2xl hover:bg-gray-100 dark:hover:bg-gray-800 transition-all active:scale-95 group text-left border border-transparent hover:border-gray-200 dark:hover:border-gray-700">
                   <div className="bg-gray-50 dark:bg-gray-900 p-3 rounded-xl group-hover:bg-white dark:group-hover:bg-gray-700 shadow-sm transition-colors">{opt.icon}</div>
@@ -2049,35 +2931,129 @@ export default function App() {
   const [joinCodeInput, setJoinCodeInput] = useState('');
   const [authError, setAuthError] = useState('');
   const [isWorking, setIsWorking] = useState(false);
+  const fileInputRef = React.useRef(null);
+
+  const processImportedFile = (file) => {
+    const reader = new FileReader();
+    
+    reader.onload = async (e) => {
+      try {
+        setIsWorking(true); setAuthError('');
+        const importedData = JSON.parse(e.target.result);
+
+        if (!importedData.categories || !importedData.menuItems) {
+          alert("Invalid Schema File. Please upload a valid Biz POS export.");
+          setIsWorking(false);
+          return;
+        }
+
+        const newShopId = `shop_${Date.now()}`;
+        const joinCode = generateJoinCode();
+
+        // 1. Create the new Shop
+        await setDoc(doc(db, 'shops', newShopId), {
+          name: importedData.name || "Imported Shop",
+          ownerId: fbUser.uid,
+          joinCode,
+          createdAt: new Date().toISOString()
+        });
+
+        // 2. Hydrate the Schema Configuration
+        await setDoc(doc(db, 'shops', newShopId, 'config', 'schema'), {
+          business: importedData.business || { type: 'custom', hasWasteColumn: true, hasEndingReconciliation: true },
+          categories: importedData.categories,
+          inventoryDb: importedData.inventoryDb || {},
+          menuItems: importedData.menuItems
+        });
+
+        // 3. Update User Profile Memberships
+        await updateDoc(doc(db, 'users', fbUser.uid), {
+          [`memberships.${newShopId}`]: 'owner'
+        });
+
+        const updatedMemberships = { ...(memberships || {}), [newShopId]: 'owner' };
+        setMemberships(updatedMemberships);
+        setSelectedShopId(newShopId);
+        setScreen('shop-select');
+
+      } catch (error) {
+        console.error("Import failed:", error);
+        alert("Could not read the JSON file. It might be corrupted.");
+      } finally {
+        setIsWorking(false);
+        if(fileInputRef.current) fileInputRef.current.value = '';
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const handleFileSelect = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      processImportedFile(file);
+    }
+  };
 
   // ── Watch Firebase auth state ──
   useEffect(() => {
+    // 1. Catch the join code from the URL before anything else happens
+    const urlParams = new URLSearchParams(window.location.search);
+    const joinCode = urlParams.get('join');
+    if (joinCode) {
+      localStorage.setItem('pendingJoinCode', joinCode.toUpperCase());
+      // Clean the URL so the code doesn't just sit there forever
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+
     const unsub = onAuthStateChanged(auth, async (user) => {
       if (!user) {
-        setFbUser(null);
-        setMemberships(null);
-        setUserDoc(null);
-        setSelectedShopId(null);
-        setScreen('splash');
+        setFbUser(null); setMemberships(null); setUserDoc(null);
+        setSelectedShopId(null); setScreen('splash');
         return;
       }
       setFbUser(user);
+
       // Fetch / create user document
       const userRef = doc(db, 'users', user.uid);
       const snap = await getDoc(userRef);
+      let membershipsData = {};
+
       if (!snap.exists()) {
-        const newDoc = { email: user.email, name: user.displayName, memberships: {} };
+        membershipsData = {};
+        const newDoc = { email: user.email, name: user.displayName, memberships: membershipsData };
         await setDoc(userRef, newDoc);
         setUserDoc(newDoc);
-        setMemberships({});
-        setScreen('no-membership');
       } else {
         const data = snap.data();
         setUserDoc(data);
-        const m = data.memberships || {};
-        setMemberships(m);
-        setScreen(Object.keys(m).length === 0 ? 'no-membership' : 'shop-select');
+        membershipsData = data.memberships || {};
       }
+
+      // 3. PROCESS AUTO-JOIN AFTER LOGIN
+      const pendingCode = localStorage.getItem('pendingJoinCode');
+      if (pendingCode) {
+        try {
+          const q = query(collection(db, 'shops'), where('joinCode', '==', pendingCode));
+          const shopSnaps = await getDocs(q);
+          if (!shopSnaps.empty) {
+            const shopDoc = shopSnaps.docs[0];
+            const shopData = shopDoc.data();
+            await updateDoc(doc(db, 'users', user.uid), { [`memberships.${shopDoc.id}`]: 'staff' });
+            membershipsData[shopDoc.id] = 'staff';
+            alert(`🎉 Successfully joined ${shopData.name}!`);
+          } else {
+            alert("The invite link is invalid or the shop no longer exists.");
+          }
+        } catch (err) {
+          console.error("Failed to process invite:", err);
+        } finally {
+          localStorage.removeItem('pendingJoinCode');
+          window.location.reload();
+        }
+      }
+
+      setMemberships(membershipsData);
+      setScreen(Object.keys(membershipsData).length === 0 ? 'no-membership' : 'shop-select');
     });
     return () => unsub();
   }, []);
@@ -2160,17 +3136,9 @@ export default function App() {
 
   // Loading state while Firebase resolves auth
   if (fbUser === undefined) {
-    return (
-      <div className="h-[100dvh] flex items-center justify-center bg-gray-950">
-        <div className="flex flex-col items-center gap-4">
-          <div className="w-16 h-16 rounded-2xl bg-red-600 flex items-center justify-center shadow-2xl">
-            <ShoppingCart size={32} className="text-white" />
-          </div>
-          <Loader2 size={24} className="text-red-400 animate-spin" />
-        </div>
-      </div>
-    );
+    return <InitialLoader onTimeoutExit={() => window.location.reload()} />;
   }
+
 
   // ── NOT LOGGED IN ──
   if (!fbUser) {
@@ -2201,7 +3169,7 @@ export default function App() {
                 <Loader2 size={20} className="animate-spin text-gray-500" />
               ) : (
                 <svg width="20" height="20" viewBox="0 0 48 48" className="shrink-0">
-                  <path fill="#4285F4" d="M44.5 20H24v8.5h11.8C34.7 33.9 29.1 37 24 37c-7.2 0-13-5.8-13-13s5.8-13 13-13c3.1 0 5.9 1.1 8.1 2.9l6.4-6.4C34.6 4.1 29.6 2 24 2 11.8 2 2 11.8 2 24s9.8 22 22 22c11 0 21-8 21-22 0-1.3-.2-2.7-.5-4z"/>
+                  <path fill="#4285F4" d="M44.5 20H24v8.5h11.8C34.7 33.9 29.1 37 24 37c-7.2 0-13-5.8-13-13s5.8-13 13-13c3.1 0 5.9 1.1 8.1 2.9l6.4-6.4C34.6 4.1 29.6 2 24 2 11.8 2 2 11.8 2 24s9.8 22 22 22c11 0 21-8 21-22 0-1.3-.2-2.7-.5-4z" />
                 </svg>
               )}
               {isWorking ? 'Signing in...' : 'Sign in with Google'}
@@ -2218,17 +3186,9 @@ export default function App() {
 
   // ── CHECKING USER DOC (shown briefly) ──
   if (memberships === null) {
-    return (
-      <div className="h-[100dvh] flex items-center justify-center bg-gray-950">
-        <div className="flex flex-col items-center gap-4">
-          <div className="w-16 h-16 rounded-2xl bg-red-600 flex items-center justify-center shadow-2xl">
-            <ShoppingCart size={32} className="text-white" />
-          </div>
-          <p className="text-gray-400 text-sm font-bold animate-pulse">Loading your account...</p>
-        </div>
-      </div>
-    );
+    return <InitialLoader onTimeoutExit={() => setSelectedShopId(null)} />;
   }
+
 
   // ── CREATE SHOP SCREEN ──
   if (screen === 'create-shop') {
@@ -2357,10 +3317,10 @@ export default function App() {
           ))}
         </div>
 
-        {/* Add Another Shop — shows both Create and Join options */}
+        {/* Add Another Shop — shows Create, Join, and Import options */}
         <div className="border-t border-white/10 pt-4 flex flex-col gap-2">
           <p className="text-[10px] text-gray-600 font-black uppercase tracking-widest text-center mb-1">Add Another Shop</p>
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-3 gap-2">
             <button
               onClick={() => { setScreen('create-shop'); setAuthError(''); setShopNameInput(''); }}
               className="py-3 bg-yellow-400/10 hover:bg-yellow-400/20 text-yellow-400 font-black rounded-2xl border border-yellow-400/20 hover:border-yellow-400/40 transition-all flex flex-col items-center justify-center gap-1 text-xs active:scale-95"
@@ -2375,8 +3335,17 @@ export default function App() {
             >
               <Key size={18} />
               Join
-              <span className="text-[9px] opacity-60 font-bold">Staff / Co-owner</span>
+              <span className="text-[9px] opacity-60 font-bold">Staff</span>
             </button>
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="py-3 bg-green-400/10 hover:bg-green-400/20 text-green-400 font-black rounded-2xl border border-green-400/20 hover:border-green-400/40 transition-all flex flex-col items-center justify-center gap-1 text-xs active:scale-95"
+            >
+              <Upload size={18} />
+              Import
+              <span className="text-[9px] opacity-60 font-bold">.JSON</span>
+            </button>
+            <input type="file" accept=".json" ref={fileInputRef} onChange={handleFileSelect} className="hidden" />
           </div>
           <button onClick={handleLogout} className="mt-2 text-gray-600 hover:text-gray-400 transition-colors text-xs font-bold text-center flex items-center justify-center gap-1">
             <LogOut size={12} /> Sign out
@@ -2397,14 +3366,28 @@ function ShopSelectCard({ shopId, role, onSelect, onDeleted }) {
   const longPressTimer = React.useRef(null);
 
   useEffect(() => {
-    getDoc(doc(db, 'shops', shopId)).then(snap => {
-      if (snap.exists()) {
-        setShopName(snap.data().name || shopId);
-        setJoinCode(snap.data().joinCode || null);
+    const fetchShopInfo = async () => {
+      try {
+        const shopRef = doc(db, 'shops', shopId);
+        // Cache-first fetch
+        let snap = await getDoc(shopRef, { source: 'cache' });
+        if (!snap.exists()) {
+          snap = await getDoc(shopRef, { source: 'server' });
+        }
+        
+        if (snap.exists()) {
+          setShopName(snap.data().name || shopId);
+          setJoinCode(snap.data().joinCode || null);
+        }
+      } catch (err) {
+        console.warn("Failed to fetch shop info:", err);
+      } finally {
+        setLoading(false);
       }
-      setLoading(false);
-    }).catch(() => setLoading(false));
+    };
+    fetchShopInfo();
   }, [shopId, role]);
+
 
   // Long-press to open manage panel
   const handlePressStart = () => {
@@ -2416,18 +3399,27 @@ function ShopSelectCard({ shopId, role, onSelect, onDeleted }) {
   const handlePressEnd = () => clearTimeout(longPressTimer.current);
 
   const handleDelete = async () => {
-    if (!window.confirm(`Delete "${shopName}"? This removes the shop for ALL staff. This cannot be undone.`)) return;
+    if (!window.confirm(`WARNING: You are the owner. Deleting "${shopName}" will permanently destroy all its data, schemas, and shift reports for ALL staff. Type 'DELETE' to confirm.`)) return;
+    const confirmText = window.prompt(`Type DELETE to confirm complete destruction of "${shopName}":`);
+    if (confirmText !== "DELETE") return alert("Deletion cancelled.");
+
     setIsDeleting(true);
     try {
-      // Remove from shops collection (owner only)
-      await setDoc(doc(db, 'shops', shopId), { deleted: true }, { merge: true });
-      // Remove from current user's memberships via updateDoc
+      // 1. Destroy the shop document completely
+      await deleteDoc(doc(db, 'shops', shopId));
+
+      // 2. Remove from current user's memberships via deleteField
       const { getAuth } = await import('firebase/auth');
       const uid = getAuth().currentUser?.uid;
       if (uid) {
-        await updateDoc(doc(db, 'users', uid), { [`memberships.${shopId}`]: null });
+        await updateDoc(doc(db, 'users', uid), { [`memberships.${shopId}`]: deleteField() });
       }
+
+      // 3. Clear local cache
+      localStorage.removeItem(`pos_storeConfig_${shopId}`);
       onDeleted?.(shopId);
+      alert("Shop deleted successfully.");
+      window.location.reload();
     } catch (err) {
       window.alert('Failed to delete: ' + err.message);
     }
@@ -2435,15 +3427,18 @@ function ShopSelectCard({ shopId, role, onSelect, onDeleted }) {
   };
 
   const handleLeave = async () => {
-    if (!window.confirm(`Leave "${shopName}"? You will need a new join code to re-enter.`)) return;
+    if (!window.confirm(`Leave "${shopName}"? You will need a new join code from the owner to re-enter.`)) return;
     setIsDeleting(true);
     try {
       const { getAuth } = await import('firebase/auth');
       const uid = getAuth().currentUser?.uid;
       if (uid) {
-        await updateDoc(doc(db, 'users', uid), { [`memberships.${shopId}`]: null });
+        await updateDoc(doc(db, 'users', uid), { [`memberships.${shopId}`]: deleteField() });
       }
+      localStorage.removeItem(`pos_storeConfig_${shopId}`);
       onDeleted?.(shopId);
+      alert("You have left the shop.");
+      window.location.reload();
     } catch (err) {
       window.alert('Failed to leave: ' + err.message);
     }

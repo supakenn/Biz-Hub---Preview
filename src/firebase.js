@@ -6,21 +6,33 @@
 
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider } from 'firebase/auth';
-import { getFirestore } from 'firebase/firestore';
+import { 
+  initializeFirestore, 
+  persistentLocalCache, 
+  persistentMultipleTabManager 
+} from 'firebase/firestore';
 
 // TODO: Replace these placeholder values with your real Firebase project config.
 // You can find them at:
 //   Firebase Console → Project Settings → General → Your Apps → Web app → SDK setup
 const firebaseConfig = {
-  apiKey: "AIzaSyAM9JnzMfKfPRNQVgFkSTpTdcIGlg7SdvY",
-  authDomain: "angels-pos.firebaseapp.com",
-  projectId: "angels-pos",
-  storageBucket: "angels-pos.firebasestorage.app",
-  messagingSenderId: "636580035181",
-  appId: "1:636580035181:web:54537b2111714816195d64"
+  apiKey: "AIzaSyBXKvBMuyK-vJlyiO5nClbbPG_PYsfPz8I",
+  authDomain: "biz-hub-suite.firebaseapp.com",
+  projectId: "biz-hub-suite",
+  storageBucket: "biz-hub-suite.firebasestorage.app",
+  messagingSenderId: "476681014629",
+  appId: "1:476681014629:web:acc85551ccc4842e8aa58c"
 };
 
 const app      = initializeApp(firebaseConfig);
 export const auth     = getAuth(app);
-export const db       = getFirestore(app);
+
+// Initialize Firestore with the persistent cache explicitly enabled
+export const db = initializeFirestore(app, {
+  localCache: persistentLocalCache({
+    tabManager: persistentMultipleTabManager()
+  })
+});
+
 export const googleProvider = new GoogleAuthProvider();
+
