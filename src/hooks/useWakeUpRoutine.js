@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { getAuth, getIdToken } from 'firebase/auth';
+import { getAuth, getIdToken } from "../demo-services/cloud-provider";
 
 /**
  * Custom hook to handle device wake-up events.
@@ -7,18 +7,9 @@ import { getAuth, getIdToken } from 'firebase/auth';
  * @param {Function} onAuthFail - Callback triggered if token refresh fails.
  */
 export const useWakeUpRoutine = (onAuthFail) => {
-  useEffect(() => {
-    const handleVisibilityChange = async () => {
-      // document.visibilityState becomes 'visible' the moment the tablet wakes up
-      if (document.visibilityState === 'visible') {
-        console.log("System Awoken: Running health check...");
-        
-        const auth = getAuth();
-        if (auth.currentUser) {
-           try {
-             // Passing 'true' forces Firebase to silently refresh the token
-             await getIdToken(auth.currentUser, true);
-             console.log("Auth token refreshed successfully.");
+    /* Simulation Mode: Logic hidden for preview */
+    console.log('Demo: Action processed');
+    return;
            } catch (err) {
              console.error("Auth token died during sleep.", err);
              // Trigger your logout / fallback logic

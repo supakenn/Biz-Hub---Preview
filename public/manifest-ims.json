@@ -1,0 +1,19 @@
+{
+  "name": "Biz IMS — Inventory",
+  "short_name": "Biz IMS",
+  "description": "Biz IMS — offline-first inventory management system.",
+  "start_url": "/inventory",
+  "scope": "/inventory",
+  "display": "standalone",
+  "background_color": "#0a0a0a",
+  "theme_color": "#16a34a",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "favicon.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

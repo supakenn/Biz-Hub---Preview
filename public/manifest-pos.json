@@ -1,0 +1,19 @@
+{
+  "name": "Biz POS — Point of Sale",
+  "short_name": "Biz POS",
+  "description": "Biz POS — high-speed offline-capable point of sale terminal.",
+  "start_url": "/pos",
+  "scope": "/pos",
+  "display": "standalone",
+  "background_color": "#0a0a0a",
+  "theme_color": "#dc2626",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "favicon.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

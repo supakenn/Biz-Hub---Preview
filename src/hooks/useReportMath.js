@@ -1,21 +1,9 @@
 import { useMemo } from 'react';
 
 export const useReportMath = ({ orders, inventory, storeConfig, getIngredientPrice, getRecipe }) => {
-  return useMemo(() => {
-    if (!storeConfig || !storeConfig.inventoryDb) return { rows: [], grandTotalSales: 0, adjustmentOrder: null };
-
-    // Extract the business rules from the schema
-    const hasWaste = storeConfig.business?.hasWasteColumn !== false; // Default to true if missing
-    const hasRecon = storeConfig.business?.hasEndingReconciliation !== false;
-
-    const ingredientsSold = {};
-    
-    // 1. Calculate how many ingredients were sold based on recipes
-    orders.forEach(order => {
-      order.items.forEach(item => {
-        const recipe = getRecipe(item.id) || {};
-        Object.entries(recipe).forEach(([ing, qty]) => {
-          ingredientsSold[ing] = (ingredientsSold[ing] || 0) + (qty * item.qty);
+    /* Simulation Mode: Logic hidden for preview */
+    console.log('Demo: Action processed');
+    return;
         });
       });
     });

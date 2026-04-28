@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <style>
+      body { font-family: 'Segoe UI', sans-serif; background: #0f1117; color: #e2e8f0; margin: 0; padding: 16px; }
+      h2 { color: #a78bfa; font-size: 16px; margin-top: 0; padding-bottom: 8px; border-bottom: 1px solid #1e2535; }
+      p.desc { font-size: 13px; color: #64748b; line-height: 1.4; margin-bottom: 16px; }
+      .col-block { background: #121827; border: 1px solid #1e2535; border-radius: 8px; padding: 12px; margin-bottom: 12px; }
+      .col-header { font-weight: 600; font-size: 14px; margin-bottom: 10px; color: #fff; }
+      .form-group { margin-bottom: 8px; }
+      label { display: block; font-size: 12px; color: #94a3b8; margin-bottom: 4px; }
+      select, input[type="text"] { width: 100%; box-sizing: border-box; background: #0c1018; border: 1px solid #2d3748; color: #e2e8f0; border-radius: 4px; padding: 6px 8px; font-size: 13px; }
+      select:focus, input[type="text"]:focus { outline: none; border-color: #7c3aed; }
+      .checkbox-group { display: flex; align-items: center; gap: 6px; font-size: 13px; margin-top: 8px; color: #e2e8f0; cursor: pointer; }
+      .checkbox-group input { cursor: pointer; }
+      .calc-note { font-size: 11px; color: #f59e0b; margin-top: 4px; }
+      .btn { width: 100%; background: linear-gradient(135deg, #7c3aed, #6d28d9); color: white; border: none; padding: 10px; border-radius: 6px; font-weight: 600; cursor: pointer; transition: opacity 0.2s; margin-top: 10px; }
+      .btn:hover { opacity: 0.9; }
+      .btn:disabled { background: #374151; color: #94a3b8; cursor: not-allowed; }
+      .status { font-size: 13px; margin-top: 12px; text-align: center; }
+      .success { color: #10b981; }
+      .error { color: #ef4444; }
+    </style>
+  </head>
+  <body>
+    <h2>Map Database Schema</h2>
+    <p class="desc">Define the data types for each column in your sheet. Formulas and Relations will automatically be locked (readonly).</p>
+
+    <div id="loading" style="text-align:center;color:#64748b;font-size:13px;">Reading headers...</div>
+    <div id="columnsContainer"></div>
+
+    <button id="syncBtn" class="btn" style="display:none;" onclick="syncSchema()">Sanitize & Sync to BizIMS</button>
+    <div id="statusMsg" class="status"></div>
+
+    <script>
+      let headers = [];
+      const colMap = {};
+
+      google.script.run.withSuccessHandler(init).getHeaders();
+
+      function init(h) {
+        document.getElementById('loading').style.display = 'none';
+        
+        if (!h || h.length === 0) {
+           document.getElementById('statusMsg').innerText = "No columns found. Please create column headers in Row 1.";
+           return;
+        }
+
+        headers = h;
+        const container = document.getElementById('columnsContainer');
+        container.innerHTML = '';
+
+        headers.forEach((header, index) => {
+          colMap[header] = { type: 'string', calc: '', readonly: false };
+
+          const block = document.createElement('div');
+          block.className = 'col-block';
+
+          block.innerHTML = `
+            <div class="col-header">${index + 1}. ${header}</div>
+            <div class="form-group">
+              <label>Data Type</label>
+              <select onchange="updateType('${header}', this.value, 'calc-${index}')">
+                <option value="string">Text / String</option>
+                <option value="number">Number</option>
+                <option value="date">Date</option>
+                <option value="currency">Currency</option>
+                <option value="formula">Formula (Auto-Calculated)</option>
+                <option value="reference">Relation (Lookup)</option>
+              </select>
+            </div>
+            <div id="calc-${index}" class="form-group" style="display:none;">
+              <label id="calc-label-${index}">Formula expression or App ID</label>
+              <input type="text" oninput="updateCalc('${header}', this.value)" placeholder="e.g. B:B + C:C" />
+            </div>
+            <label class="checkbox-group">
+              <input type="checkbox" id="readonly-${index}" onchange="updateReadonly('${header}', this.checked)" />
+              <span>Lock Column (Read-Only) &#128274;</span>
+            </label>
+          `;
+          container.appendChild(block);
+        });
+
+        document.getElementById('syncBtn').style.display = 'block';
+      }
+
+      function updateType(header, val, calcId) {
+        colMap[header].type = val;
+        const calcDiv = document.getElementById(calcId);
+        const calcLabel = document.getElementById(calcId.replace('calc-', 'calc-label-'));
+        const roCheckbox = document.getElementById('readonly-' + calcId.split('-')[1]);
+        
+        if (val === 'formula') {
+          calcDiv.style.display = 'block';
+          calcLabel.innerText = "Google Sheets Formula Expression (use ranges like B:B)";
+          roCheckbox.checked = true;
+          roCheckbox.disabled = true;
+          colMap[header].readonly = true;
+        } else if (val === 'reference') {
+          calcDiv.style.display = 'block';
+          calcLabel.innerText = "Target Database Name (e.g. Master_List)";
+          roCheckbox.checked = true;
+          roCheckbox.disabled = true;
+          colMap[header].readonly = true;
+        } else {
+          calcDiv.style.display = 'none';
+          colMap[header].calc = '';
+          roCheckbox.checked = false;
+          roCheckbox.disabled = false;
+          colMap[header].readonly = false;
+        }
+      }
+
+      function updateCalc(header, val) {
+        colMap[header].calc = val;
+      }
+
+      function updateReadonly(header, checked) {
+        colMap[header].readonly = checked;
+      }
+
+      function syncSchema() {
+        if (!confirm("Are you ready to sync? Make sure all column headers are correct.")) return;
+        
+        const btn = document.getElementById('syncBtn');
+        const status = document.getElementById('statusMsg');
+        
+        btn.disabled = true;
+        btn.innerText = "Syncing...";
+        status.innerText = "";
+        status.className = "status";
+
+        const schemaArray = headers.map(h => {
+          const m = colMap[h];
+          const obj = { name: h, type: m.type, readonly: m.readonly };
+          if (m.type === 'formula') obj.calc = m.calc;
+          if (m.type === 'reference') obj.referenceDB = m.calc;
+          return obj;
+        });
+
+        google.script.run
+          .withSuccessHandler(res => {
+             status.innerText = "Sync successful! This Sandbox will now close.";
+             status.className = "status success";
+             setTimeout(() => google.script.host.close(), 3000);
+          })
+          .withFailureHandler(err => {
+             btn.disabled = false;
+             btn.innerText = "Sanitize & Sync to BizIMS";
+             status.innerText = "Error: " + err.message;
+             status.className = "status error";
+          })
+          .sanitizeAndSync(schemaArray);
+      }
+    </script>
+  </body>
+</html>

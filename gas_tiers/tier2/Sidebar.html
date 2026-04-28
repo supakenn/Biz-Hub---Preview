@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:'Google Sans',Roboto,Arial,sans-serif;background:#0f1117;color:#e2e8f0;font-size:13px}
+    .wrap{padding:14px;display:flex;flex-direction:column;gap:12px}
+    .hdr{display:flex;align-items:center;gap:8px;padding-bottom:10px;border-bottom:1px solid #1e2535}
+    .hdr h2{font-size:14px;font-weight:600;color:#a78bfa}.hdr p{font-size:10px;color:#64748b;margin-top:2px}
+    .tabs{display:flex;gap:3px}
+    .tab{flex:1;padding:6px 2px;text-align:center;font-size:11px;font-weight:600;cursor:pointer;border-radius:5px;color:#64748b;border:1px solid #1e2535;transition:all .15s}
+    .tab.active{background:#1a1f2e;color:#a78bfa;border-color:#7c3aed}
+    .tab:hover:not(.active){color:#94a3b8;background:#141824}
+    .panel{display:none;flex-direction:column;gap:10px}.panel.active{display:flex}
+    .card{background:#1a1f2e;border:1px solid #1e2535;border-radius:7px;padding:11px;display:flex;flex-direction:column;gap:8px}
+    label{font-size:10px;font-weight:600;color:#94a3b8;text-transform:uppercase;letter-spacing:.5px}
+    input,textarea,select{background:#0f1117;border:1px solid #2d3748;border-radius:5px;padding:7px 9px;color:#e2e8f0;font-size:12px;width:100%;outline:none;transition:border-color .2s;font-family:inherit}
+    input:focus,textarea:focus,select:focus{border-color:#7c3aed}
+    textarea{min-height:80px;resize:vertical;font-family:monospace;font-size:11px}
+    .btn{display:flex;align-items:center;justify-content:center;gap:5px;border:none;border-radius:5px;padding:8px 12px;font-size:12px;font-weight:600;cursor:pointer;transition:opacity .15s;width:100%}
+    .btn:hover:not(:disabled){opacity:.85}.btn:disabled{opacity:.4;cursor:not-allowed}
+    .btn-p{background:linear-gradient(135deg,#7c3aed,#6d28d9);color:#fff}
+    .btn-g{background:linear-gradient(135deg,#059669,#047857);color:#fff}
+    .btn-sm{padding:5px 10px;font-size:11px;width:auto;border-radius:4px}
+    .status{border-radius:5px;padding:8px 10px;font-size:11px;line-height:1.5;display:none}
+    .status.show{display:block}.status.ok{background:#1a2e22;border:1px solid #276749;color:#68d391}
+    .status.err{background:#2d1a1a;border:1px solid #742a2a;color:#fc8181}
+    .status.inf{background:#1e2a3a;border:1px solid #2a4365;color:#63b3ed}
+    .spinner{width:12px;height:12px;border:2px solid rgba(255,255,255,.2);border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite;display:none}
+    .spinner.on{display:inline-block}@keyframes spin{to{transform:rotate(360deg)}}
+    .user-row{display:flex;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:1px solid #1e2535}
+    .user-row:last-child{border:0}
+    .user-email{font-size:11px;color:#94a3b8;flex:1;overflow:hidden;text-overflow:ellipsis}
+    .badge{font-size:10px;padding:2px 7px;border-radius:99px;font-weight:600;margin:0 4px}
+    .badge.HEAD{background:#2e1065;color:#c4b5fd}.badge.PENDING{background:#2a2318;color:#f59e0b}
+    .badge.USER{background:#1a2e22;color:#68d391}.badge.SUB-HEAD{background:#1e2a3a;color:#63b3ed}
+    .badge.TECH{background:#1a2535;color:#38bdf8}
+    .hint{font-size:10px;color:#475569;line-height:1.4}
+    .node-item{display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid #1e2535}
+    .node-item:last-child{border:0}.node-name{font-size:12px;font-weight:600;color:#a78bfa}
+    .cfg-row{display:flex;gap:6px;align-items:center}
+    .cfg-row input{flex:1}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <div class="hdr">
+    <div><h2>🏢 Biz IMS Admin</h2><p>Monolithic Hub Control Panel</p></div>
+  </div>
+
+  <div class="tabs">
+    <div class="tab active" onclick="sw('users',this)">👥 Users</div>
+    <div class="tab" onclick="sw('nodes',this)">📦 Nodes</div>
+    
+    <div class="tab" onclick="sw('cfg',this)">⚙️ Config</div>
+  </div>
+
+  <!-- ── USERS ── -->
+  <div class="panel active" id="tab-users">
+    <div class="card" id="userList"><div style="font-size:11px;color:#64748b">Loading users…</div></div>
+    <div class="status" id="ustatus"></div>
+  </div>
+
+  <!-- ── NODES ── -->
+  <div class="panel" id="tab-nodes">
+    <div class="card" id="nodeList"><div style="font-size:11px;color:#64748b">Loading nodes…</div></div>
+    <div class="card">
+      <label>Create New Node</label>
+      <input type="text" id="newNodeName" placeholder="Node name (e.g. Database_A)" />
+      <label style="margin-top:4px">Schema JSON</label>
+      <textarea id="newNodeSchema" placeholder='[{"name":"SKU","type":"id"},{"name":"Item","type":"text"},{"name":"Stock","type":"number"}]'></textarea>
+      <button class="btn btn-p" onclick="createNode()"><span class="spinner" id="cnSpin"></span>Create Node</button>
+    </div>
+    <div class="status" id="nstatus"></div>
+  </div>
+
+  
+
+  <!-- ── CONFIG ── -->
+  <div class="panel" id="tab-cfg">
+    <div class="card">
+      <label>SELF_URL (this deployment)</label>
+      <div class="cfg-row"><input type="text" id="cfgSelfUrl" /></div>
+      <label style="margin-top:4px">AUDIT_FIFO_LIMIT</label>
+      <div class="cfg-row"><input type="number" id="cfgFifo" /></div>
+      <button class="btn btn-p" onclick="saveConfig()">Save Config</button>
+    </div>
+    <div class="status" id="cstatus"></div>
+  </div>
+</div>
+
+<script>
+var _d = {}; // cached admin data
+
+function sw(id, el) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  el.classList.add('active');
+  document.getElementById('tab-' + id).classList.add('active');
+}
+
+// ── Boot ──────────────────────────────────────────────────────────────────────
+google.script.run.withSuccessHandler(function(data) {
+  _d = data;
+  renderUsers(data.users);
+  renderNodes(data.nodes);
+  populateNodeSelect(data.nodes);
+  document.getElementById('cfgSelfUrl').value = data.selfUrl || '';
+  document.getElementById('cfgFifo').value    = data.fifoLimit || '10000';
+}).withFailureHandler(function(e) {
+  status('ustatus', 'Error loading data: ' + e.message, 'err');
+}).getAdminData();
+
+// ── Users ─────────────────────────────────────────────────────────────────────
+function renderUsers(users) {
+  var box = document.getElementById('userList');
+  if (!users || !users.length) { box.innerHTML = '<div style="font-size:11px;color:#64748b">No users registered yet.</div>'; return; }
+  box.innerHTML = users.map(function(u) {
+    var approveBtn = u.role === 'PENDING'
+      ? '<button class="btn btn-g btn-sm" onclick="approve(\'' + u.email + '\')">Approve</button>'
+      : '';
+    return '<div class="user-row"><span class="user-email">' + u.email + '</span><span class="badge ' + u.role + '">' + u.role + '</span>' + approveBtn + '</div>';
+  }).join('');
+}
+
+function approve(email) {
+  var role = prompt('Assign role for ' + email + ':\nHEAD / SUB-HEAD / TECH / USER');
+  if (!role) return;
+  var nodes = role === 'HEAD' ? 'ALL' : (prompt('Allowed nodes (comma-separated, or ALL)\ne.g. Database_A,Database_B') || '[]');
+  var allowed = nodes === 'ALL' ? 'ALL' : JSON.stringify(nodes.split(',').map(s => s.trim()));
+  google.script.run.withSuccessHandler(function(r) {
+    if (r.error) return status('ustatus', r.error, 'err');
+    status('ustatus', r.status, 'ok');
+    google.script.run.withSuccessHandler(function(d) { _d = d; renderUsers(d.users); }).getAdminData();
+  }).sidebarApproveUser(email, role.toUpperCase(), allowed);
+}
+
+// ── Nodes ─────────────────────────────────────────────────────────────────────
+function renderNodes(nodes) {
+  var box = document.getElementById('nodeList');
+  if (!nodes || !nodes.length) { box.innerHTML = '<div style="font-size:11px;color:#64748b">No nodes yet. Create one below.</div>'; return; }
+  box.innerHTML = nodes.map(function(n) {
+    return '<div class="node-item"><span class="node-name">📦 ' + n.name + '</span><span style="font-size:10px;color:#64748b">' + n.schema.length + ' cols</span></div>';
+  }).join('');
+}
+
+function createNode() {
+  var name   = document.getElementById('newNodeName').value.trim();
+  var schema = document.getElementById('newNodeSchema').value.trim();
+  if (!name || !schema) return status('nstatus', 'Node name and schema JSON are required.', 'err');
+  try { JSON.parse(schema); } catch(e) { return status('nstatus', 'Invalid JSON schema: ' + e.message, 'err'); }
+  spin('cnSpin', true);
+  google.script.run.withSuccessHandler(function(r) {
+    spin('cnSpin', false);
+    if (r.error) return status('nstatus', r.error, 'err');
+    status('nstatus', r.status, 'ok');
+    document.getElementById('newNodeName').value   = '';
+    document.getElementById('newNodeSchema').value = '';
+    google.script.run.withSuccessHandler(function(d) { _d = d; renderNodes(d.nodes); populateNodeSelect(d.nodes); }).getAdminData();
+  }).withFailureHandler(function(e){ spin('cnSpin',false); status('nstatus', e.message, 'err'); })
+  .sidebarCreateNode(name, schema);
+}
+
+// ── Config ────────────────────────────────────────────────────────────────────
+function saveConfig() {
+  var selfUrl = document.getElementById('cfgSelfUrl').value.trim();
+  var fifo    = document.getElementById('cfgFifo').value.trim();
+  google.script.run.withSuccessHandler(function(){
+    google.script.run.sidebarSetConfig('AUDIT_FIFO_LIMIT', fifo);
+    status('cstatus', 'Config saved.', 'ok');
+  }).withFailureHandler(function(e){ status('cstatus', e.message, 'err'); })
+  .sidebarSetConfig('SELF_URL', selfUrl);
+}
+
+// ── Utils ─────────────────────────────────────────────────────────────────────
+function status(id, msg, type) {
+  var el = document.getElementById(id);
+  el.textContent = msg; el.className = 'status show ' + type;
+}
+function spin(id, on) { document.getElementById(id).className = 'spinner' + (on ? ' on' : ''); }
+</script>
+</body>
+</html>

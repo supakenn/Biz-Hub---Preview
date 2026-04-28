@@ -1,11 +1,12 @@
 {
-  "name": "Biz POS",
-  "short_name": "Biz POS",
+  "name": "Biz Hub",
+  "short_name": "Biz Hub",
+  "description": "Biz Hub — multi-tenant business management suite.",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
-  "background_color": "#dc2626",
+  "background_color": "#0a0a0a",
   "theme_color": "#dc2626",
-  "description": "Biz POS — multi-tenant offline-capable point of sale.",
   "orientation": "portrait-primary",
   "icons": [
     {
